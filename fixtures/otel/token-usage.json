@@ -1,0 +1,30 @@
+{
+  "resourceLogs": [
+    {
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "timeUnixNano": "1784716920000000000",
+              "body": { "stringValue": "codex.api_request" },
+              "attributes": [
+                { "key": "event.id", "value": { "stringValue": "otel-fixture-usage-001" } },
+                { "key": "conversation.id", "value": { "stringValue": "thread-fixture-sol" } },
+                { "key": "turn.id", "value": { "stringValue": "turn-fixture-003" } },
+                { "key": "gen_ai.request.model", "value": { "stringValue": "gpt-5.4-sol" } },
+                { "key": "codex.reasoning_effort", "value": { "stringValue": "max" } },
+                { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "1840000" } },
+                { "key": "codex.usage.cached_input_tokens", "value": { "intValue": "404800" } },
+                { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "82600" } },
+                { "key": "codex.usage.reasoning_output_tokens", "value": { "intValue": "31400" } },
+                { "key": "codex.usage.total_tokens", "value": { "intValue": "1954000" } },
+                { "key": "duration_ms", "value": { "intValue": "10860000" } },
+                { "key": "outcome", "value": { "stringValue": "success" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# Add to the user-level ~/.codex/config.toml only after Codex Meter shows a
+# running loopback receiver and provides the local secret. Codex ignores `otel`
+# in project-local .codex/config.toml files.
+
+[otel]
+environment = "local"
+log_user_prompt = false
+exporter = { otlp-http = {
+  endpoint = "http://127.0.0.1:9464/v1/logs",
+  protocol = "json",
+  headers = { "authorization" = "Bearer REPLACE_WITH_LOCAL_CODEX_METER_SECRET" }
+} }
+trace_exporter = "none"
+metrics_exporter = "none"

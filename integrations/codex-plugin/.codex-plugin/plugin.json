@@ -1,0 +1,18 @@
+{
+  "name": "codex-plugin",
+  "version": "0.1.0",
+  "description": "Optional local telemetry bridge for Codex Meter",
+  "author": {
+    "name": "Codex Meter contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Meter integration",
+    "shortDescription": "Send allowlisted lifecycle metadata to a local Codex Meter instance.",
+    "longDescription": "Optional, fail-open hooks for local Codex Meter telemetry. Prompt, response, command, tool argument, and transcript content is discarded.",
+    "developerName": "Codex Meter contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Local hooks", "Read-only usage analysis"],
+    "defaultPrompt": "Explain recent Codex Meter usage without claiming exact quota attribution."
+  }
+}

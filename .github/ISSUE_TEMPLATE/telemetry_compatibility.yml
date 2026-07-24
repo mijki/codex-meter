@@ -1,0 +1,21 @@
+name: Telemetry compatibility
+description: Report a Codex-version schema or event mismatch.
+title: '[Compatibility]: Codex '
+labels: [compatibility, telemetry]
+body:
+  - type: input
+    id: codex
+    attributes:
+      label: 'codex --version'
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Channel
+      options: [App Server, lifecycle hooks, OpenTelemetry, plugin]
+  - type: textarea
+    id: redacted
+    attributes:
+      label: Redacted schema or error detail
+      description: Do not attach raw payloads unless they are synthetic and reviewed.

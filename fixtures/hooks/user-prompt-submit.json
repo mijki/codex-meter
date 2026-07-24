@@ -1,0 +1,10 @@
+{
+  "event_id": "hook-fixture-prompt-001",
+  "hook_event_name": "UserPromptSubmit",
+  "timestamp": "2026-07-22T09:30:00Z",
+  "session_id": "thread-fixture-sol",
+  "turn_id": "turn-fixture-003",
+  "model": "gpt-5.4-sol",
+  "permission_mode": "default",
+  "prompt": "Synthetic prompt content that the adapter must discard"
+}

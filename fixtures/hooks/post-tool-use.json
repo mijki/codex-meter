@@ -1,0 +1,13 @@
+{
+  "event_id": "hook-fixture-tool-001",
+  "hook_event_name": "PostToolUse",
+  "timestamp": "2026-07-22T10:15:00Z",
+  "session_id": "thread-fixture-sol",
+  "turn_id": "turn-fixture-003",
+  "model": "gpt-5.4-sol",
+  "tool_category": "shell",
+  "succeeded": true,
+  "duration_ms": 820,
+  "tool_input": { "command": "synthetic command that must be discarded" },
+  "tool_output": "synthetic output that must be discarded"
+}
