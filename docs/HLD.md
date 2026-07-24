@@ -4,9 +4,11 @@
 
 Codex Meter is structured as a desktop shell around a local telemetry pipeline:
 
-`Codex sources -> normalization -> SQLite -> dashboard view models -> Svelte UI`
+`Codex sources -> normalization -> SQLite -> deterministic analytics -> dashboard view models -> Svelte UI`
 
-The repository currently shows the UI, fixture data, the SQLite schema, generated schema evidence, and the desktop shell configuration. Live ingestion is still under validation and should not be advertised as verified in this snapshot.
+Live read-only account ingestion is verified for Codex CLI 0.144.1. Forecasting
+is a separate local analytics layer and is never presented as an App Server
+capability.
 
 ## Major layers
 
@@ -16,12 +18,16 @@ The repository currently shows the UI, fixture data, the SQLite schema, generate
 - `src/lib/types.ts` defines the view models and accuracy classes.
 - `src/lib/api.ts` isolates the UI from the Tauri command surface.
 - `src/lib/fixture.ts` provides synthetic demo data.
+- `uPlot` renders time-proportional charts without owning analytics or changing
+  telemetry classifications.
 
 ### Native shell
 
 - Tauri 2 owns the desktop window and the local application bundle.
 - `src-tauri/tauri.conf.json` defines the window, security policy, and installer targets.
-- `src-tauri/migrations/0001_initial.sql` defines the SQLite schema.
+- `src-tauri/migrations/` contains the ordered schema through version 4.
+- `src-tauri/src/forecast.rs` computes deterministic rates, projections, model
+  quality, and trajectory points from compatible quota observations.
 
 ### Integration evidence
 
@@ -43,8 +49,14 @@ The Svelte layer renders this contract and does not reinterpret missing values.
 Numeric absence is `null`; zero remains an observed value.
 
 Alert delivery and alert persistence are separate. SQLite retains alert history
-and dismissal state, while Tauri events only notify the current UI of newly
-crossed exact thresholds.
+plus unread/dismissed/resolved state, while Tauri events only notify the current
+UI of newly crossed exact thresholds. Locally estimated risk alerts remain
+in-app and identify their forecast source.
+
+Forecast input is segmented by quota bucket and reset identity. Usage drops and
+long observation gaps start a new analytical segment. Models use actual elapsed
+time, require minimum evidence, and return `unavailable` instead of inventing an
+exhaustion time when the slope is invalid or non-positive.
 
 Demo mode is an in-memory frontend presentation path. It does not pause the
 collector, replace SQLite data, or emit notifications.

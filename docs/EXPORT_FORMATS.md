@@ -21,6 +21,7 @@ The `ExportEnvelope` includes:
 - settings and retention preferences;
 - source health;
 - quota windows and token totals;
+- current forecast trajectories, model quality, risk, and alert lifecycle state;
 - turn summaries;
 - burn analysis;
 - accuracy labels.
@@ -33,7 +34,10 @@ Use CSV for spreadsheet workflows. The first row is:
 section,id,label,value,accuracy,detail,secondary,tertiary,quaternary
 ```
 
-Rows are emitted for quota windows, turns, channel health, and warnings. Each metric row preserves the available stable identifier and classification.
+Rows are emitted for quota windows, forecast summaries, safe rates, alert
+history, account usage, turns, channel health, collector sessions/errors, and
+warnings. Each metric row preserves the available stable identifier and
+classification.
 
 - stable IDs;
 - timestamp fields;
@@ -42,6 +46,13 @@ Rows are emitted for quota windows, turns, channel health, and warnings. Each me
 - metric value;
 - accuracy classification;
 - any available attribution fields.
+
+`quota_forecast` rows label the selected modeled rate as `estimated` and include
+risk, predicted exhaustion, projected reset usage, and confidence.
+`quota_safe_rate` rows are `derived_exact` percentage-points-per-hour arithmetic.
+`alert` rows preserve their own `reported_exact` or `estimated` classification,
+source, bucket/reset identity, and resolution timestamp. Detailed trajectory
+points remain JSON-only in v0.1.
 
 ## Diagnostics export
 

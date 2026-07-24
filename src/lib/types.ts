@@ -27,6 +27,12 @@ export interface QuotaAlert {
   severity: AlertSeverity;
   accuracy: Accuracy;
   dismissedAt: string | null;
+  resolvedAt: string | null;
+  unread: boolean;
+  alertType: string;
+  alertSource: string;
+  predictedExhaustionAt: string | null;
+  forecastConfidence: ForecastConfidence | null;
 }
 
 export interface AlertCenter {
@@ -48,6 +54,76 @@ export interface QuotaWindow {
   resetsAtRaw?: number | null;
   resetInterpretation?: string;
   accuracy: Accuracy;
+}
+
+export type ForecastModel =
+  | 'recent_rate'
+  | 'ordinary_least_squares'
+  | 'exponentially_weighted_moving_average'
+  | 'unavailable';
+export type ForecastConfidence = 'unavailable' | 'preliminary' | 'low' | 'medium' | 'high';
+export type ForecastRisk = 'healthy' | 'watch' | 'at_risk' | 'exhaustion_likely' | 'unavailable';
+
+export interface ConsumptionTrajectoryPoint {
+  observedAt: string;
+  reportedUsedPercent: number | null;
+  rollingTrendPercent: number | null;
+  forecastUsedPercent: number | null;
+  confidenceLowPercent: number | null;
+  confidenceHighPercent: number | null;
+}
+
+export interface BurnRatePoint {
+  observedAt: string;
+  intervalRatePph: number | null;
+  rolling30mRatePph: number | null;
+  rolling1hRatePph: number | null;
+  rolling3hRatePph: number | null;
+  rolling6hRatePph: number | null;
+  ewmaRatePph: number | null;
+  safeRatePph: number | null;
+}
+
+export interface ForecastQuality {
+  selectedModel: ForecastModel;
+  confidence: ForecastConfidence;
+  observationCount: number;
+  coverageDurationMinutes: number;
+  pollingRegularity: number;
+  largestGapMinutes: number;
+  modelAgreement: number | null;
+  slopeStability: number | null;
+  invalidationReason: string | null;
+  missingSignals: string[];
+}
+
+export interface QuotaForecast {
+  bucketId: string;
+  bucketName: string;
+  windowLabel: string;
+  generatedAt: string;
+  resetsAt: string | null;
+  currentUsedPercent: number | null;
+  remainingPercent: number | null;
+  latestIntervalRatePph: number | null;
+  rolling30mRatePph: number | null;
+  rolling1hRatePph: number | null;
+  rolling3hRatePph: number | null;
+  rolling6hRatePph: number | null;
+  completeWindowRatePph: number | null;
+  ewmaRatePph: number | null;
+  regressionRatePph: number | null;
+  selectedRatePph: number | null;
+  safeRatePph: number | null;
+  paceRatio: number | null;
+  risk: ForecastRisk;
+  predictedExhaustionAt: string | null;
+  projectedUsageAtReset: number | null;
+  exhaustionBeforeReset: boolean | null;
+  quality: ForecastQuality;
+  trajectory: ConsumptionTrajectoryPoint[];
+  burnRates: BurnRatePoint[];
+  status: TelemetryStatus;
 }
 
 export interface AccountUsageDailyBucket {
@@ -121,6 +197,9 @@ export interface ChannelHealth {
   lastSuccessfulCollectionAt: string | null;
   latestError: SourceError | null;
   capabilities: string[];
+  telemetryState: TelemetryState;
+  configurationStatus: string;
+  restartCount: number;
 }
 
 export interface Dashboard {
@@ -130,6 +209,8 @@ export interface Dashboard {
   lastEventAt: string | null;
   quota: QuotaWindow[];
   quotaStatus: TelemetryStatus;
+  forecasts: QuotaForecast[];
+  forecastStatus: TelemetryStatus;
   accountUsage: AccountUsageSummary | null;
   accountUsageStatus: TelemetryStatus;
   today: TokenTotals;

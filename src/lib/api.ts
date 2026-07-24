@@ -32,6 +32,17 @@ export async function dismissAlert(alert: QuotaAlert): Promise<Dashboard> {
   return getDashboard();
 }
 
+export async function markAlertsRead(): Promise<Dashboard> {
+  if (!isTauri()) return emptyDashboard();
+  await invoke<void>('mark_alerts_read');
+  return getDashboard();
+}
+
+export async function getResolvedDatabasePath(): Promise<string> {
+  if (!isTauri()) throw new Error('The resolved database path is available in the desktop app.');
+  return invoke<string>('get_resolved_database_path');
+}
+
 export async function getSettings(): Promise<AppSettings> {
   if (!isTauri()) {
     return {
@@ -55,9 +66,9 @@ export async function getCollectorDiagnostics(): Promise<CollectorDiagnostics> {
       childRunning: false,
       executable: null,
       transport: 'stdio',
-      databasePath: null,
+      databasePath: '%APPDATA%\\dev.codexmeter.app\\codex-meter.sqlite',
       logPath: null,
-      schemaVersion: '0.144.1 · v1 + v2 + v3',
+      schemaVersion: '0.144.1 · v1 + v2 + v3 + v4',
       resetInterpretation: 'No live reset value observed',
       latestError: null,
     };
@@ -113,6 +124,15 @@ export function emptyDashboard(): Dashboard {
       lastObservedAt: null,
       reason: 'No reliable quota snapshot is available.',
       requiredIntegration: 'Read-only App Server collection',
+    },
+    forecasts: [],
+    forecastStatus: {
+      state: 'unavailable',
+      accuracy: 'unavailable',
+      source: 'Local deterministic forecast',
+      lastObservedAt: null,
+      reason: 'A quota forecast needs at least three compatible observations.',
+      requiredIntegration: 'Read-only App Server quota history',
     },
     accountUsage: null,
     accountUsageStatus: {
@@ -195,6 +215,9 @@ export function emptyDashboard(): Dashboard {
         lastSuccessfulCollectionAt: null,
         latestError: null,
         capabilities: ['Quota windows', 'Account activity'],
+        telemetryState: 'waiting',
+        configurationStatus: 'Configured',
+        restartCount: 0,
       },
       {
         id: 'lifecycle-hooks',
@@ -207,6 +230,9 @@ export function emptyDashboard(): Dashboard {
         lastSuccessfulCollectionAt: null,
         latestError: null,
         capabilities: ['Turn completion', 'Model and reasoning', 'Attribution'],
+        telemetryState: 'disabled',
+        configurationStatus: 'Not configured',
+        restartCount: 0,
       },
       {
         id: 'opentelemetry',
@@ -219,6 +245,9 @@ export function emptyDashboard(): Dashboard {
         lastSuccessfulCollectionAt: null,
         latestError: null,
         capabilities: ['Token composition', 'Usage Burn evidence'],
+        telemetryState: 'disabled',
+        configurationStatus: 'Not configured',
+        restartCount: 0,
       },
     ],
     modelStatus: {

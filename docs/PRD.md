@@ -17,8 +17,9 @@ Codex Meter should collect, store, and explain locally available Codex telemetry
 
 The current repository is a native local-first vertical slice with live,
 read-only App Server account collection, SQLite history, shared telemetry
-states, persistent quota alerts, source recovery details, and an in-memory Demo
-mode. Generated App Server schema artifacts target Codex CLI 0.144.1.
+states, deterministic quota outlooks, persistent quota and forecast-risk alerts,
+source recovery details, and an in-memory Demo mode. Generated App Server schema
+artifacts target Codex CLI 0.144.1.
 
 ## User goals
 
@@ -31,6 +32,10 @@ mode. Generated App Server schema artifacts target Codex CLI 0.144.1.
   unavailable, failed, or showing Demo data;
 - distinguish an exact reported zero from a missing value;
 - review, dismiss, and audit quota alerts by reset window.
+- see whether the current quota pace is sustainable and when a locally estimated
+  exhaustion would occur;
+- inspect the observations, model, coverage, gaps, and agreement behind an
+  estimate rather than receiving an unexplained prediction.
 
 ## Non-goals
 
@@ -39,6 +44,8 @@ mode. Generated App Server schema artifacts target Codex CLI 0.144.1.
 - exact project-level quota attribution when the source cannot prove it;
 - storing raw prompts or full responses by default;
 - claiming live supervision or collection that has not been verified.
+- treating percentage burn as token consumption or claiming that a forecast was
+  reported by Codex.
 
 ## Success criteria
 
@@ -50,3 +57,6 @@ mode. Generated App Server schema artifacts target Codex CLI 0.144.1.
 - tests cover the current visible behavior.
 - warning-level quota risk remains prominent until dismissed;
 - Demo data never enters the live telemetry database or native notification path.
+- the highest-priority quota risk is visible without opening a secondary view;
+- forecasts degrade to a reasoned unavailable state when the evidence is
+  insufficient and preserve reported/derived/estimated provenance throughout.

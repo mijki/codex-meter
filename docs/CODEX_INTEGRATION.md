@@ -58,6 +58,20 @@ Use these rules:
 - attribution or inference is `estimated`;
 - unsupported or missing fields are `unavailable`.
 
+## Local quota forecasting
+
+Forecasting is downstream of protocol normalization and does not expand the
+verified App Server surface. Codex Meter stores reported used percentages and
+raw/normalized reset evidence, selects observations from the current
+bucket/reset segment, and applies deterministic elapsed-time analytics locally.
+
+Interval and rolling percentage-point rates and safe pace are exact arithmetic
+over their inputs. EWMA/OLS rates, predicted exhaustion, projected reset usage,
+confidence bounds, and risk are `estimated`. If timestamps, reset identity,
+sample count, elapsed coverage, or slope are insufficient, the forecast is
+`unavailable`. No quota capacity, token conversion, or Codex-supplied prediction
+is inferred.
+
 ## Current integration boundary
 
 The native application now supervises a separate `codex app-server --stdio` process and performs only initialization, `account/rateLimits/read`, and `account/usage/read`. These account reads were observed live with CLI 0.144.1 and persisted to SQLite. The collector also validates and persists `account/rateLimits/updated` and `thread/tokenUsage/updated` when naturally received.

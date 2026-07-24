@@ -5,10 +5,14 @@
   let {
     alerts,
     ondismiss,
+    onmarkread,
   }: {
     alerts: AlertCenterModel;
     ondismiss: (alert: QuotaAlert) => void;
+    onmarkread: () => void;
   } = $props();
+
+  const unread = $derived(alerts.active.filter((alert) => alert.unread));
 </script>
 
 <section class="view-stack" aria-labelledby="alert-center-title">
@@ -19,6 +23,32 @@
     </div>
     <p>{alerts.active.length} active</p>
   </div>
+
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">New since last review</p>
+        <h2>Unread alerts</h2>
+      </div>
+      <span class="alert-count">{unread.length}</span>
+    </div>
+    {#if unread.length}
+      <button class="button secondary" onclick={onmarkread}>Mark all active alerts read</button>
+      <div class="alert-history-list">
+        {#each unread as alert (alert.id)}
+          <div>
+            <strong>{alert.bucketName} · {alert.severity}</strong>
+            <span
+              >{alert.alertType.replaceAll('_', ' ')} · created
+              {new Date(alert.createdAt).toLocaleString()}</span
+            >
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <p class="muted-copy">No unread active alerts.</p>
+    {/if}
+  </article>
 
   <article class="panel">
     <div class="panel-head">
@@ -74,10 +104,16 @@
       <div class="alert-history-list">
         {#each alerts.history as alert (alert.id)}
           <div>
-            <strong>{alert.bucketName} · {alert.severity} · {alert.threshold}% threshold</strong>
+            <strong
+              >{alert.bucketName} · {alert.severity} · {alert.alertType.replaceAll(
+                '_',
+                ' ',
+              )}</strong
+            >
             <span>
               Created {new Date(alert.createdAt).toLocaleString()} · reset window {alert.resetWindowId}
               · {alert.accuracy.replace('_', ' ')}
+              {alert.resolvedAt ? ` · resolved ${new Date(alert.resolvedAt).toLocaleString()}` : ''}
             </span>
           </div>
         {/each}

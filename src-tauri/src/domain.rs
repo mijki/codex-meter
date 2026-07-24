@@ -78,6 +78,113 @@ pub struct QuotaWindow {
     pub accuracy: Accuracy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForecastModel {
+    RecentRate,
+    OrdinaryLeastSquares,
+    ExponentiallyWeightedMovingAverage,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForecastConfidence {
+    Unavailable,
+    Preliminary,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForecastRisk {
+    Healthy,
+    Watch,
+    AtRisk,
+    ExhaustionLikely,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaObservation {
+    pub observed_at: String,
+    pub used_percent: f64,
+    pub accuracy: Accuracy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumptionTrajectoryPoint {
+    pub observed_at: String,
+    pub reported_used_percent: Option<f64>,
+    pub rolling_trend_percent: Option<f64>,
+    pub forecast_used_percent: Option<f64>,
+    pub confidence_low_percent: Option<f64>,
+    pub confidence_high_percent: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BurnRatePoint {
+    pub observed_at: String,
+    pub interval_rate_pph: Option<f64>,
+    pub rolling_30m_rate_pph: Option<f64>,
+    pub rolling_1h_rate_pph: Option<f64>,
+    pub rolling_3h_rate_pph: Option<f64>,
+    pub rolling_6h_rate_pph: Option<f64>,
+    pub ewma_rate_pph: Option<f64>,
+    pub safe_rate_pph: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForecastQuality {
+    pub selected_model: ForecastModel,
+    pub confidence: ForecastConfidence,
+    pub observation_count: usize,
+    pub coverage_duration_minutes: f64,
+    pub polling_regularity: f64,
+    pub largest_gap_minutes: f64,
+    pub model_agreement: Option<f64>,
+    pub slope_stability: Option<f64>,
+    pub invalidation_reason: Option<String>,
+    pub missing_signals: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaForecast {
+    pub bucket_id: String,
+    pub bucket_name: String,
+    pub window_label: String,
+    pub generated_at: String,
+    pub resets_at: Option<String>,
+    pub current_used_percent: Option<f64>,
+    pub remaining_percent: Option<f64>,
+    pub latest_interval_rate_pph: Option<f64>,
+    pub rolling_30m_rate_pph: Option<f64>,
+    pub rolling_1h_rate_pph: Option<f64>,
+    pub rolling_3h_rate_pph: Option<f64>,
+    pub rolling_6h_rate_pph: Option<f64>,
+    pub complete_window_rate_pph: Option<f64>,
+    pub ewma_rate_pph: Option<f64>,
+    pub regression_rate_pph: Option<f64>,
+    pub selected_rate_pph: Option<f64>,
+    pub safe_rate_pph: Option<f64>,
+    pub pace_ratio: Option<f64>,
+    pub risk: ForecastRisk,
+    pub predicted_exhaustion_at: Option<String>,
+    pub projected_usage_at_reset: Option<f64>,
+    pub exhaustion_before_reset: Option<bool>,
+    pub quality: ForecastQuality,
+    pub trajectory: Vec<ConsumptionTrajectoryPoint>,
+    pub burn_rates: Vec<BurnRatePoint>,
+    pub status: TelemetryStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageDailyBucket {
@@ -179,6 +286,9 @@ pub struct ChannelHealth {
     pub last_successful_collection_at: Option<String>,
     pub latest_error: Option<SourceError>,
     pub capabilities: Vec<String>,
+    pub telemetry_state: TelemetryState,
+    pub configuration_status: String,
+    pub restart_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,6 +307,12 @@ pub struct QuotaAlert {
     pub severity: AlertSeverity,
     pub accuracy: Accuracy,
     pub dismissed_at: Option<String>,
+    pub resolved_at: Option<String>,
+    pub unread: bool,
+    pub alert_type: String,
+    pub alert_source: String,
+    pub predicted_exhaustion_at: Option<String>,
+    pub forecast_confidence: Option<ForecastConfidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -251,6 +367,8 @@ pub struct Dashboard {
     pub last_event_at: Option<String>,
     pub quota: Vec<QuotaWindow>,
     pub quota_status: TelemetryStatus,
+    pub forecasts: Vec<QuotaForecast>,
+    pub forecast_status: TelemetryStatus,
     pub account_usage: Option<AccountUsageSummary>,
     pub account_usage_status: TelemetryStatus,
     pub today: TokenTotals,
@@ -346,6 +464,12 @@ impl Dashboard {
                 "No reliable quota snapshot is available.",
                 "Read-only App Server collection",
             ),
+            forecasts: Vec::new(),
+            forecast_status: unavailable_status(
+                "Local deterministic forecast",
+                "A quota forecast needs at least three compatible observations.",
+                "Read-only App Server quota history",
+            ),
             account_usage: None,
             account_usage_status: unavailable_status(
                 "Codex App Server",
@@ -385,6 +509,9 @@ impl Dashboard {
                     last_successful_collection_at: None,
                     latest_error: None,
                     capabilities: vec!["Quota windows".to_string(), "Account activity".to_string()],
+                    telemetry_state: TelemetryState::Waiting,
+                    configuration_status: "Configured".to_string(),
+                    restart_count: 0,
                 },
                 ChannelHealth {
                     id: "lifecycle-hooks".to_string(),
@@ -401,6 +528,9 @@ impl Dashboard {
                         "Model and reasoning".to_string(),
                         "Attribution".to_string(),
                     ],
+                    telemetry_state: TelemetryState::Disabled,
+                    configuration_status: "Not configured".to_string(),
+                    restart_count: 0,
                 },
                 ChannelHealth {
                     id: "opentelemetry".to_string(),
@@ -416,6 +546,9 @@ impl Dashboard {
                         "Token composition".to_string(),
                         "Usage Burn evidence".to_string(),
                     ],
+                    telemetry_state: TelemetryState::Disabled,
+                    configuration_status: "Not configured".to_string(),
+                    restart_count: 0,
                 },
             ],
             collector_diagnostics: CollectorDiagnostics {

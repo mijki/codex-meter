@@ -1,4 +1,127 @@
-# Execution Plan: telemetry-state UX and persistent alerts
+# Execution Plan: professional quota-risk dashboard
+
+## Forecasting and operational-dashboard continuation (2026-07-24)
+
+### Objective and user-visible outcome
+
+Transform the verified native MVP into a risk-first operational dashboard that
+answers whether the active account quota window is on a sustainable pace. The
+interface must keep reported quota observations, exact arithmetic, and local
+forecasts visually and semantically distinct.
+
+The smallest complete vertical slice is:
+
+`segmented quota history -> deterministic burn analytics -> persisted forecast ->
+quota-risk hero and trajectory -> forecast-risk alerts -> dedicated Forecast view`
+
+The slice preserves the existing App Server collector, SQLite history, tray
+lifecycle, export controls, explicit Live/Demo mode, and detailed-turn
+integration states.
+
+### Verified constraints and current discoveries
+
+- Git is clean on `feat/professional-dashboard-ux`; `main` and the remote
+  feature branch still point to the baseline commit. Changes must remain
+  unstaged and uncommitted.
+- The repository already implements the seven-state telemetry contract,
+  nullable token totals, exact quota-threshold alerts, alert dismissal/history,
+  source recovery semantics, and in-memory Demo mode.
+- Existing SQLite schema version 3 has quota snapshots and threshold alerts but
+  no analytical window, forecast-history, forecast-evaluation, alert
+  resolution/unread, or forecast-risk persistence.
+- Quota snapshots contain reported used percentage and reset metadata. They do
+  not expose quota units or token capacity, so all rates are percentage points
+  per hour and the predicted event is quota exhaustion, never token exhaustion.
+- Historical snapshots may be irregular and may span resets. Forecasting must
+  segment on bucket/reset/window identity and defensive discontinuities before
+  calculating a slope.
+- The frontend has no chart dependency. A small uPlot adapter will be used for
+  time-proportional charts instead of a bespoke rendering engine; chart data
+  remains typed and accessible outside the canvas.
+- Native Windows toast delivery remains deferred because it requires a separate
+  notification/plugin and Windows identity review. Persistent in-app and tray
+  risk communication remain in scope.
+
+### Accuracy and privacy decisions
+
+- Historical used percentages are `reported_exact`.
+- Remaining percentage, interval/rolling rates, safe rate, and complete-window
+  rate are `derived_exact` calculations whose interpretation is explicitly
+  local.
+- EWMA, regression, selected modeled rate, pace ratio based on that model,
+  exhaustion time, projected usage at reset, confidence, and risk assessment
+  are `estimated`.
+- Forecasts with fewer than three valid observations, less than 15 minutes of
+  coverage, non-positive/unstable selected rates, expired reset horizons, or
+  ambiguous boundaries are unavailable rather than assigned an arbitrary date.
+- Demo forecasts stay in frontend memory and cannot be inserted into live
+  forecast or alert tables.
+- User-facing diagnostics show environment notation. Full resolved paths remain
+  available only through an explicit copy action and are excluded from redacted
+  diagnostics.
+
+### Milestones
+
+- [x] Verify Git branch/status/log/diff and read the required repository,
+      product, integration, implementation, migration, and test material.
+- [x] Record forecasting, segmentation, chart, alert, and accuracy decisions in
+      the living plan and ADR.
+- [x] Add versioned forecast/alert persistence and deterministic native
+      analytics with regular, irregular, reset, gap, confidence, and evaluation
+      tests.
+- [x] Extend the shared native/frontend contract with quota series, burn-rate
+      windows, forecast quality, risk state, and alert lifecycle metadata.
+- [x] Rebuild Overview around an operational header, quota-risk hero, active
+      alerts, trajectory, compact KPI strip, secondary account activity, source
+      health, and one detailed-integration card.
+- [x] Add Forecast navigation, bucket/range controls, consumption and burn-rate
+      charts, forecast-quality detail, and a separate token-activity chart.
+- [x] Extend alert generation for pace/forecast risk, unread, dismissal,
+      resolution, reset-window deduplication, and Demo suppression.
+- [x] Redact displayed diagnostics paths, finish keyboard/focus/reduced-motion
+      behavior, and verify supported desktop breakpoints.
+- [x] Extend Vitest and Playwright coverage and pass frontend, Rust, UI,
+      migration, privacy, and unsigned executable/NSIS gates. Native AppData
+      runtime and MSI completion were externally blocked and are recorded below.
+- [x] Update README, changelog, product/design/integration/testing/export/
+      troubleshooting/capability documentation with exact validation results
+      and remaining limitations.
+
+### Validation log
+
+| Command / inspection                  | Result                                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `git status --short`                  | Clean; no staged or unstaged changes before this continuation.                                              |
+| `git branch --show-current`           | `feat/professional-dashboard-ux`.                                                                           |
+| `git log --oneline --decorate -n 5`   | Baseline `d5d59fb`; local feature, main, and remote refs aligned.                                           |
+| `git diff --check`                    | Passed before implementation.                                                                               |
+| Required docs/source/migration review | Completed; forecast analytics and persistence confirmed absent.                                             |
+| Existing chart dependency inspection  | None present in the locked frontend dependency graph.                                                       |
+| `pnpm install --frozen-lockfile`      | Passed; locked graph already current.                                                                       |
+| `pnpm format:check` / `pnpm lint`     | Passed.                                                                                                     |
+| `pnpm check`                          | Passed: 0 errors, 0 warnings.                                                                               |
+| `pnpm test`                           | Passed: 24 tests.                                                                                           |
+| `pnpm build`                          | Passed: 126 modules.                                                                                        |
+| `pnpm test:ui`                        | Passed: 1 Chromium operational-dashboard smoke test.                                                        |
+| Rust format/check/Clippy              | Passed; Clippy warnings denied.                                                                             |
+| `cargo test ... --all-features`       | Passed: 50 tests.                                                                                           |
+| Visual verdict iteration 2            | Passed heuristic category review at 93/100; no reference supplied.                                          |
+| `pnpm tauri dev`                      | Compiled; sandbox denied AppData SQLite write. Elevated retry was rejected by the automatic usage reviewer. |
+| `pnpm tauri build`                    | Fresh executable and NSIS built; WiX MSI bundling blocked by sandbox.                                       |
+| Authenticode                          | Fresh executable and NSIS both `NotSigned`, as expected.                                                    |
+
+### Deferred work and explicit non-goals
+
+- No external forecasting service, language model, statistical claim of
+  calibrated probability, exact quota units, or exact project/chat/turn quota
+  attribution.
+- Native Windows toast notifications remain deferred; this slice documents the
+  dependency and identity limitation while preserving professional in-app and
+  tray alerts.
+- Forecast evaluation is recorded only for windows whose outcome was actually
+  observed. Interrupted collection is not scored.
+- Collector-health changes and material forecast-confidence changes are shown
+  in their dedicated views but do not yet create persistent alert-history rows.
 
 ## Telemetry-state and alert continuation (2026-07-23)
 

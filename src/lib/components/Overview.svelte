@@ -3,6 +3,8 @@
   import QuotaAlertCard from './QuotaAlertCard.svelte';
   import QuotaCard from './QuotaCard.svelte';
   import TelemetryState from './TelemetryState.svelte';
+  import TimeSeriesChart from './TimeSeriesChart.svelte';
+  import type { ChartMarker, ChartSeries } from './TimeSeriesChart.svelte';
   import type { Dashboard, QuotaAlert } from '../types';
 
   let {
@@ -10,11 +12,15 @@
     onnavigate,
     ondismiss,
     onenterdemo,
+    onrefresh,
+    refreshdisabled,
   }: {
     dashboard: Dashboard;
-    onnavigate: (view: 'Alerts' | 'Settings' | 'Turns' | 'Usage Burn') => void;
+    onnavigate: (view: 'Alerts' | 'Forecast' | 'Settings' | 'Turns' | 'Usage Burn') => void;
     ondismiss: (alert: QuotaAlert) => void;
     onenterdemo: () => void;
+    onrefresh: () => void;
+    refreshdisabled: boolean;
   } = $props();
 
   const formatNumber = (value: number): string =>
@@ -41,9 +47,159 @@
       ['warning', 'critical', 'exhausted'].includes(alert.severity),
     ),
   );
+  const priorityForecast = $derived(dashboard.forecasts[0]);
+  const trajectory = $derived(priorityForecast?.trajectory ?? []);
+  const trajectorySeries = $derived<ChartSeries[]>([
+    {
+      label: 'Reported used',
+      values: trajectory.map((point) => point.reportedUsedPercent),
+      color: '#7ce0a4',
+      accuracy: 'reported_exact',
+    },
+    {
+      label: 'Rolling trend',
+      values: trajectory.map((point) => point.rollingTrendPercent),
+      color: '#76a9df',
+      accuracy: 'derived_exact',
+    },
+    {
+      label: 'Estimated forecast',
+      values: trajectory.map((point) => point.forecastUsedPercent),
+      color: '#e1a454',
+      accuracy: 'estimated',
+      dashed: true,
+    },
+  ]);
+  const trajectoryMarkers = $derived<ChartMarker[]>(
+    priorityForecast
+      ? [
+          { at: priorityForecast.generatedAt, label: 'Current', color: '#a8b6b0' },
+          ...(priorityForecast.predictedExhaustionAt
+            ? [
+                {
+                  at: priorityForecast.predictedExhaustionAt,
+                  label: 'Estimated exhaustion',
+                  color: '#e46767',
+                },
+              ]
+            : []),
+          ...(priorityForecast.resetsAt
+            ? [{ at: priorityForecast.resetsAt, label: 'Reset', color: '#7b9e90' }]
+            : []),
+        ]
+      : [],
+  );
+  const formatPercent = (value: number | null | undefined): string =>
+    value === null || value === undefined ? '—' : `${value.toFixed(1)}%`;
+  const formatRate = (value: number | null | undefined): string =>
+    value === null || value === undefined ? '—' : `${value.toFixed(2)} pp/h`;
+  const formatRatio = (value: number | null | undefined): string =>
+    value === null || value === undefined ? '—' : `${value.toFixed(2)}×`;
+  const formatTime = (value: string | null | undefined): string =>
+    value ? new Date(value).toLocaleString() : 'Unavailable';
+  const accountDays = $derived(dashboard.accountUsage?.dailyUsageBuckets ?? []);
+  const currentDayTokens = $derived(accountDays[0]?.tokens ?? null);
+  const sevenDayAverage = $derived(
+    accountDays.length
+      ? accountDays.slice(0, 7).reduce((sum, day) => sum + day.tokens, 0) /
+          Math.min(7, accountDays.length)
+      : null,
+  );
 </script>
 
 <section class="view-stack">
+  <section class="operational-header" aria-label="Operational status">
+    <div>
+      <span class:demo-mode={dashboard.demoMode} class="mode-chip"
+        >{dashboard.demoMode ? 'DEMO DATA' : 'LIVE'}</span
+      >
+      <div>
+        <strong>{dashboard.collectorState}</strong>
+        <small>Collector · Codex {dashboard.codexVersion}</small>
+      </div>
+    </div>
+    <dl>
+      <div>
+        <dt>Last successful refresh</dt>
+        <dd>
+          {dashboard.lastEventAt ? new Date(dashboard.lastEventAt).toLocaleString() : 'Waiting'}
+        </dd>
+      </div>
+      <div>
+        <dt>Active alerts</dt>
+        <dd>{dashboard.alerts.active.length}</dd>
+      </div>
+    </dl>
+    <button class="button secondary" onclick={onrefresh} disabled={refreshdisabled}
+      >Refresh now</button
+    >
+  </section>
+
+  {#if priorityForecast}
+    <article class="quota-risk-hero risk-{priorityForecast.risk}">
+      <div class="hero-main">
+        <div>
+          <p class="eyebrow">Highest-priority quota window</p>
+          <h2>{priorityForecast.bucketName} · {priorityForecast.windowLabel}</h2>
+          <p class="risk-assessment">
+            <strong>{priorityForecast.risk.replaceAll('_', ' ')}</strong>
+            <span>Locally derived pace assessment</span>
+          </p>
+        </div>
+        <div class="hero-usage">
+          <strong>{formatPercent(priorityForecast.currentUsedPercent)}</strong>
+          <span>reported used</span>
+          <small>{formatPercent(priorityForecast.remainingPercent)} derived remaining</small>
+        </div>
+      </div>
+      <div class="hero-risk-grid">
+        <div><span>Reset</span><strong>{formatTime(priorityForecast.resetsAt)}</strong></div>
+        <div>
+          <span>Current rolling burn</span><strong
+            >{formatRate(priorityForecast.selectedRatePph)}</strong
+          >
+        </div>
+        <div><span>Safe burn</span><strong>{formatRate(priorityForecast.safeRatePph)}</strong></div>
+        <div><span>Pace ratio</span><strong>{formatRatio(priorityForecast.paceRatio)}</strong></div>
+        <div>
+          <span>Estimated quota exhaustion</span>
+          <strong>{formatTime(priorityForecast.predictedExhaustionAt)}</strong>
+        </div>
+        <div>
+          <span>Projected at reset</span>
+          <strong>{formatPercent(priorityForecast.projectedUsageAtReset)}</strong>
+        </div>
+        <div>
+          <span>Before reset?</span>
+          <strong
+            >{priorityForecast.exhaustionBeforeReset === null
+              ? 'Unavailable'
+              : priorityForecast.exhaustionBeforeReset
+                ? 'Yes · attention required'
+                : 'No'}</strong
+          >
+        </div>
+        <div>
+          <span>Forecast quality</span>
+          <strong
+            >{priorityForecast.quality.confidence} · {priorityForecast.quality.observationCount}
+            samples</strong
+          >
+        </div>
+      </div>
+      <div class="hero-badges">
+        <AccuracyBadge accuracy="reported_exact" />
+        <AccuracyBadge accuracy="derived_exact" />
+        <AccuracyBadge accuracy="estimated" />
+        <button class="text-button" onclick={() => onnavigate('Forecast')}>Open Forecast →</button>
+      </div>
+    </article>
+  {:else}
+    <article class="panel">
+      <TelemetryState status={dashboard.forecastStatus} />
+    </article>
+  {/if}
+
   {#if prominentAlerts.length}
     <section class="risk-zone" aria-labelledby="quota-risk-title">
       <div class="section-heading">
@@ -87,6 +243,51 @@
     >
   </section>
 
+  <article class="panel chart-panel">
+    <TimeSeriesChart
+      title="Consumption trajectory"
+      description="Reported history, derived rolling trend, and estimated quota forecast."
+      timestamps={trajectory.map((point) => point.observedAt)}
+      series={trajectorySeries}
+      markers={trajectoryMarkers}
+      thresholds={[50, 75, 90, 100]}
+    />
+  </article>
+
+  {#if priorityForecast}
+    <section class="kpi-strip" aria-label="Quota risk metrics">
+      <div>
+        <span>Current usage</span><strong
+          >{formatPercent(priorityForecast.currentUsedPercent)}</strong
+        >
+      </div>
+      <div>
+        <span>Remaining quota</span><strong
+          >{formatPercent(priorityForecast.remainingPercent)}</strong
+        >
+      </div>
+      <div>
+        <span>Latest interval</span><strong
+          >{formatRate(priorityForecast.latestIntervalRatePph)}</strong
+        >
+      </div>
+      <div>
+        <span>1-hour rolling</span><strong>{formatRate(priorityForecast.rolling1hRatePph)}</strong>
+      </div>
+      <div>
+        <span>6-hour rolling</span><strong>{formatRate(priorityForecast.rolling6hRatePph)}</strong>
+      </div>
+      <div><span>Safe rate</span><strong>{formatRate(priorityForecast.safeRatePph)}</strong></div>
+      <div><span>Pace ratio</span><strong>{formatRatio(priorityForecast.paceRatio)}</strong></div>
+      <div>
+        <span>Estimated exhaustion</span><strong
+          >{formatTime(priorityForecast.predictedExhaustionAt)}</strong
+        >
+      </div>
+      <div><span>Confidence</span><strong>{priorityForecast.quality.confidence}</strong></div>
+    </section>
+  {/if}
+
   <div class="section-heading">
     <div>
       <p class="eyebrow">Current allowance</p>
@@ -126,6 +327,14 @@
         {/if}
         <dl class="facts">
           <div>
+            <dt>Current day</dt>
+            <dd>{currentDayTokens === null ? 'Unavailable' : formatNumber(currentDayTokens)}</dd>
+          </div>
+          <div>
+            <dt>7-day average</dt>
+            <dd>{sevenDayAverage === null ? 'Unavailable' : formatNumber(sevenDayAverage)}</dd>
+          </div>
+          <div>
             <dt>Peak day</dt>
             <dd>
               {dashboard.accountUsage.peakDailyTokens === null
@@ -150,6 +359,26 @@
             </dd>
           </div>
         </dl>
+        {#if accountDays.length}
+          <div class="daily-trend" aria-label="Recent daily token trend">
+            {#each accountDays.slice(0, 7).reverse() as day (day.startDate)}
+              <div title={`${day.startDate}: ${formatNumber(day.tokens)} reported tokens`}>
+                <span
+                  style={`height:${Math.max(
+                    8,
+                    (day.tokens / Math.max(...accountDays.slice(0, 7).map((item) => item.tokens))) *
+                      100,
+                  )}%`}
+                ></span>
+                <small
+                  >{new Date(`${day.startDate}T12:00:00Z`).toLocaleDateString([], {
+                    weekday: 'narrow',
+                  })}</small
+                >
+              </div>
+            {/each}
+          </div>
+        {/if}
       {:else}
         <TelemetryState status={dashboard.accountUsageStatus} compact />
       {/if}
@@ -176,17 +405,27 @@
               <p>
                 <strong>{channel.name}</strong>
                 <small
-                  >{channel.enabled ? 'Enabled' : 'Disabled'} · {channel.healthy
-                    ? 'Healthy'
-                    : 'Not healthy'}</small
+                  >{channel.enabled ? 'Enabled' : 'Disabled'} · {channel.configurationStatus}</small
                 >
               </p>
+              <div class="source-state-row">
+                <span data-state={channel.telemetryState}>{channel.telemetryState}</span>
+                <strong>{channel.healthy ? 'Healthy' : channel.detail}</strong>
+              </div>
               <dl>
                 <div>
                   <dt>Last event</dt>
                   <dd>
                     {channel.lastEventAt ? new Date(channel.lastEventAt).toLocaleString() : 'None'}
                   </dd>
+                </div>
+                <div>
+                  <dt>Restarts</dt>
+                  <dd>{channel.restartCount}</dd>
+                </div>
+                <div>
+                  <dt>Current health</dt>
+                  <dd>{channel.status}</dd>
                 </div>
                 <div>
                   <dt>Last success</dt>
