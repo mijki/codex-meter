@@ -15,3 +15,15 @@ if (!window.matchMedia) {
     }),
   });
 }
+
+if (!navigator.clipboard) {
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText: async () => undefined },
+    configurable: true,
+  });
+}
+
+Object.defineProperty(window, 'scrollTo', {
+  value: () => {},
+  configurable: true,
+});

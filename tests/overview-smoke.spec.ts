@@ -15,7 +15,14 @@ if (process.env.VITEST) {
     await expect(
       page.getByRole('heading', { name: 'Detailed turn telemetry is not configured.' }),
     ).toBeVisible();
-    await expect(page.getByLabel(/Open alert center, 0 active alerts/i).first()).toBeVisible();
+    await expect(
+      page.getByLabel(/Open alert center, 0 unread alerts, 0 active alerts/i).first(),
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: 'Forecast', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Quota outlook' })).toBeVisible();
+    await expect(page.getByLabel('Telemetry state: Unavailable').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
 
     await page.getByRole('button', { name: 'Demo', exact: true }).click();
     await expect(page.getByText('DEMO DATA').first()).toBeVisible();
@@ -24,8 +31,17 @@ if (process.env.VITEST) {
     await expect(
       page.getByLabel(/Critical quota alert for Synthetic critical example/i),
     ).toBeVisible();
-    await expect(page.getByLabel(/Open alert center, 2 active alerts/i).first()).toBeVisible();
+    await expect(
+      page.getByLabel(/Open alert center, 2 unread alerts, 2 active alerts/i).first(),
+    ).toBeVisible();
 
+    await page.getByRole('button', { name: 'Forecast', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Quota outlook' })).toBeVisible();
+    await expect(page.getByRole('figure', { name: 'Consumption trajectory' })).toBeVisible();
+    await expect(page.getByRole('figure', { name: 'Burn rate' })).toBeVisible();
+    await expect(page.getByText(/medium confidence/i)).toBeVisible();
+
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Source health' })).toBeVisible();
     await expect(page.getByText(/Last success/i).first()).toBeVisible();
     await expect(page.getByText(/Supplies: Quota windows, Account activity/i)).toBeVisible();
@@ -40,6 +56,13 @@ if (process.env.VITEST) {
     await page.getByRole('button', { name: 'Usage Burn' }).click();
     await expect(page.getByText(/Correlation only/i)).toBeVisible();
     await expect(page.getByText('Exact quota units')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Diagnostics' }).click();
+    await expect(page.getByText('%APPDATA%\\dev.codexmeter.app\\codex-meter.sqlite')).toBeVisible();
+    await expect(page.getByText(/C:\\Users\\/i)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByRole('heading', { name: 'Manual, local setup' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Live', exact: true }).click();
     await expect(page.getByText('DEMO DATA')).toHaveCount(0);

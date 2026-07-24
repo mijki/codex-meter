@@ -22,6 +22,19 @@ Each missing signal lists its source and setup state. Exact quota units and
 project-level attribution are unsupported by the verified interface; completed
 turn evidence may instead be waiting, disabled, unavailable, or failed.
 
+## Forecast says unavailable or preliminary
+
+Codex Meter needs at least three compatible quota observations covering 15
+minutes in the current bucket/reset segment. A reset, a usage drop greater than
+two percentage points, a gap over two hours, missing reset time, or a
+non-positive/invalid slope can withhold the estimate. Keep Live collection
+running; the UI shows the exact invalidation reason and never substitutes an
+arbitrary exhaustion time.
+
+Forecasts use percentage points per hour because the verified interface does
+not expose quota capacity units. They are local estimates, not values reported
+by Codex and not token forecasts.
+
 ## Export buttons do nothing outside the desktop app
 
 The export actions are desktop-only. Browser mode uses local fallbacks and does not write export files.
@@ -53,7 +66,11 @@ On Node 26, Playwright's managed Vite child may remain during teardown. Start `p
 
 ## Where are local data and exports?
 
-The database is `%APPDATA%\dev.codexmeter.app\codex-meter.sqlite`. Exports are written below `%APPDATA%\dev.codexmeter.app\exports`. Diagnostics displays the resolved database path. A destination picker and file logger are not currently implemented.
+The database is `%APPDATA%\dev.codexmeter.app\codex-meter.sqlite`. Exports are
+written below `%APPDATA%\dev.codexmeter.app\exports`. Diagnostics shows this
+redacted environment-relative form by default; use **Copy full resolved
+database path** when the absolute path is explicitly needed. A destination
+picker and file logger are not currently implemented.
 
 ## `pnpm test` or `pnpm check` fails on the fixture UI
 

@@ -6,6 +6,21 @@ All notable changes to Codex Meter will be recorded here.
 
 ### Added
 
+- Professional operational dashboard with a priority quota-risk hero, KPI strip,
+  time-proportional uPlot charts, compact source-health grid, responsive states,
+  keyboard focus treatment, and explicit Live/Demo presentation.
+- Deterministic quota analytics over reset-segmented history: interval and
+  rolling burn rates, safe pace, pace ratio, EWMA, ordinary least squares,
+  exhaustion estimate, projected reset usage, confidence bounds, and forecast
+  quality metadata.
+- SQLite migration v4 for forecast history/evaluation and unread/resolved
+  forecast-alert lifecycle fields.
+- Dedicated Forecast view and separate account token-activity chart; quota
+  percentages and token totals remain separate units.
+- Local forecast-risk alerts for unsafe pace and predicted exhaustion, including
+  deduplication, read state, automatic resolution, and retained history.
+- Forecast and alert records in normalized CSV export; the JSON dashboard
+  envelope includes the full current forecast view model.
 - Shared `live`, `waiting`, `disabled`, `unsupported`, `unavailable`, `error`,
   and `fixture` telemetry-state contract across Rust and TypeScript.
 - Migration-backed quota alert center with active, dismissed, and history views,
@@ -30,6 +45,10 @@ All notable changes to Codex Meter will be recorded here.
 
 ### Changed
 
+- Navigation now follows the operational order Overview, Forecast, Usage Burn,
+  Projects, Chats, Turns, Models, History, Alerts, Diagnostics, Settings.
+- Diagnostics redacts the application-data root by default and reveals the full
+  resolved database path only through an explicit copy action.
 - Missing token telemetry is now nullable; exact zero is rendered only when a
   verified record explicitly reports zero.
 - Overview is ordered by quota risk, active alerts, quota windows, account

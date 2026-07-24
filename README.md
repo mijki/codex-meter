@@ -4,7 +4,7 @@ Codex Meter is an **experimental, local-first Windows desktop application** that
 
 > **Codex Meter is an independent open-source project and is not affiliated with, endorsed by, or supported by OpenAI. Codex interfaces and telemetry fields may change between versions.**
 
-The native Windows slice uses Tauri 2, Svelte/TypeScript, Rust, and SQLite. It supervises a local Codex App Server, performs only verified read-only account calls, persists live quota and usage history, and keeps synthetic Demo data in memory and outside the live database. It also includes persistent quota alerts, deterministic Usage Burn analysis, local settings, JSON/CSV/redacted diagnostic exports, delete-local-data support, tray lifecycle behavior, version-specific App Server schemas, and optional uninstalled hook/OpenTelemetry integration assets.
+The native Windows slice uses Tauri 2, Svelte/TypeScript, Rust, and SQLite. It supervises a local Codex App Server, performs only verified read-only account calls, persists live quota and usage history, and keeps synthetic Demo data in memory and outside the live database. It also includes deterministic local quota forecasting, persistent threshold and forecast-risk alerts, Usage Burn analysis, local settings, JSON/CSV/redacted diagnostic exports, delete-local-data support, tray lifecycle behavior, version-specific App Server schemas, and optional uninstalled hook/OpenTelemetry integration assets.
 
 ## Why this project exists
 
@@ -41,19 +41,25 @@ when a verified source explicitly reports zero.
 ## Current functionality
 
 - Risk-first Overview with prominent warning/critical alerts, quota windows,
-  account activity, detailed source health, and compact turn analytics.
-- Persistent alert center with active, dismissed, and retained history views;
-  stable deduplication uses bucket, reset window, and crossed threshold.
+  a highest-priority quota outlook, consumption trajectory, account activity,
+  detailed source health, and compact turn analytics.
+- Dedicated Forecast view with time-proportional quota and burn-rate charts,
+  reset/exhaustion markers, 30-minute through 6-hour rolling rates, EWMA and
+  ordinary-least-squares estimates, confidence ranges, and quality diagnostics.
+- Persistent alert center with unread, active, dismissed, resolved, and retained
+  history views; stable deduplication uses bucket, reset window, and alert type.
 - Accessible quota severity bands: neutral below 50%, informational at 50–74%,
   warning at 75–89%, critical at 90–99%, and exhausted at 100%.
 - Usage Burn view with ranked evidence, method, confidence, missing signals, and correlation-only language.
-- Projects, Chats, Turns, Models, History, Diagnostics, Alerts, and Settings navigation with typed empty/partial states.
+- Forecast, Usage Burn, Projects, Chats, Turns, Models, History, Alerts,
+  Diagnostics, and Settings navigation with typed empty/partial states.
 - Source Health reports enablement, current health, last event, last successful
   collection, timestamped current or historical errors, and supplied capabilities.
 - Explicit Live/Demo selector. Demo data is visually marked on every view, never
   persisted or exported, and never emits native notifications.
-- Versioned SQLite migrations covering normalized telemetry plus alert history,
-  dismissal state, source recovery timestamps, and existing local controls.
+- Versioned SQLite migrations covering normalized telemetry, forecast history
+  and evaluation, alert lifecycle state, source recovery timestamps, and local
+  controls.
 - Bounded Codex App Server supervision over newline-delimited stdio JSON-RPC with initialization, typed response/notification handling, timeouts, pause/resume, restart backoff, and clean shutdown.
 - Live `account/rateLimits/read` and `account/usage/read` collection with dynamically discovered quota buckets, defensive reset-time normalization, and exact account usage summaries/daily buckets.
 - Deterministic hook and OTLP JSON adapters that discard content fields and reject malformed/oversized input.
@@ -64,6 +70,9 @@ when a verified source explicitly reports zero.
 - In-app quota-threshold events at 50%, 75%, 90%, and 100%, persisted and
   deduplicated by bucket, reset window, and threshold and emitted only for
   `reported_exact` data.
+- Locally estimated forecast-risk alerts for unsafe pace and likely exhaustion,
+  with confidence and predicted time shown explicitly and resolved when the
+  condition clears.
 - App Server JSON-RPC parsing, correlation, timeout/restart policy, and generated 0.144.1 schemas.
 
 The authenticated loopback OpenTelemetry receiver remains unimplemented and disabled. The optional plugin is not installed or trusted.
@@ -167,6 +176,12 @@ The local investigation and live read-only probe used `codex-cli 0.144.1`. Gener
 
 ## Known limitations
 
+- Forecasts are local deterministic estimates over reported percentage history,
+  not Codex predictions. They are withheld when sample count, elapsed coverage,
+  reset identity, or timestamp quality is insufficient.
+- Forecast segmentation uses bucket/reset identity plus detected drops and long
+  gaps. Account identity is not segmented because the verified rate-limit
+  response does not expose a stable account identifier.
 - A separately launched App Server was verified for account reads, but it may not observe token events produced by unrelated Codex desktop sessions.
 - The authenticated loopback OpenTelemetry listener, hook spool replay, and plugin validator remain deferred.
 - Quota reset units are not documented in the schema. Values in a plausible seconds or milliseconds range are normalized and labeled; ambiguous values remain raw and are not shown as exact times.

@@ -30,9 +30,9 @@ const defaultDiagnostics: CollectorDiagnostics = {
   childRunning: true,
   executable: 'codex',
   transport: 'stdio',
-  databasePath: 'local-app-data/codex-meter.sqlite',
+  databasePath: '%APPDATA%\\dev.codexmeter.app\\codex-meter.sqlite',
   logPath: null,
-  schemaVersion: '0.144.1 · v1 + v2 + v3',
+  schemaVersion: '0.144.1 · v1 + v2 + v3 + v4',
   resetInterpretation: 'Unix seconds',
   latestError: null,
 };
@@ -45,7 +45,9 @@ const apiMocks = vi.hoisted(() => ({
   getCollectorDiagnostics: vi.fn(),
   getDashboard: vi.fn(),
   getOtelConfigSnippet: vi.fn(),
+  getResolvedDatabasePath: vi.fn(),
   getSettings: vi.fn(),
+  markAlertsRead: vi.fn(),
   saveSettings: vi.fn(),
 }));
 
@@ -157,6 +159,17 @@ describe('telemetry-state overview', () => {
     apiMocks.enterDemoMode.mockResolvedValue(structuredClone(fixtureDashboard));
     apiMocks.dismissAlert.mockImplementation(async () =>
       buildDashboard({ alerts: { active: [], dismissed: [], history: [] } }),
+    );
+    apiMocks.markAlertsRead.mockImplementation(async () => {
+      const dashboard = buildDashboard();
+      dashboard.alerts.active = dashboard.alerts.active.map((alert) => ({
+        ...alert,
+        unread: false,
+      }));
+      return dashboard;
+    });
+    apiMocks.getResolvedDatabasePath.mockResolvedValue(
+      'C:\\Users\\example\\AppData\\Roaming\\dev.codexmeter.app\\codex-meter.sqlite',
     );
   });
 
@@ -307,5 +320,60 @@ describe('telemetry-state overview', () => {
     expect(await screen.findByText('Last historical error')).toBeInTheDocument();
     expect(screen.getByText(/Supplies: Quota windows, Account activity/i)).toBeInTheDocument();
     expect(screen.getAllByText('Last success').length).toBeGreaterThan(0);
+  });
+
+  it('prioritizes quota risk and forecast metrics over account lifetime usage', async () => {
+    render(App);
+    expect(
+      await screen.findByRole('heading', { name: 'Codex · 5 hour window' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Locally derived pace assessment')).toBeInTheDocument();
+    expect(screen.getByText('Current rolling burn')).toBeInTheDocument();
+    expect(screen.getByText('Safe burn')).toBeInTheDocument();
+    expect(screen.getAllByText('Estimated quota exhaustion').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Quota risk metrics')).toBeInTheDocument();
+  });
+
+  it('renders the dedicated Forecast view with trajectory, burn, quality, and controls', async () => {
+    render(App);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Forecast' }));
+    expect(await screen.findByRole('heading', { name: 'Quota outlook' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Quota bucket')).toBeInTheDocument();
+    expect(screen.getByLabelText('Forecast time range')).toBeInTheDocument();
+    expect(screen.getByLabelText('Consumption trajectory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Burn rate')).toBeInTheDocument();
+    expect(screen.getByText('medium confidence')).toBeInTheDocument();
+  });
+
+  it('shows an honest forecast empty state without drawing a fake line', async () => {
+    const dashboard = buildDashboard({
+      forecasts: [],
+      forecastStatus: {
+        state: 'unavailable',
+        accuracy: 'unavailable',
+        source: 'Local deterministic forecast',
+        lastObservedAt: null,
+        reason: 'Fewer than three compatible observations are available.',
+        requiredIntegration: 'Read-only App Server quota history',
+      },
+    });
+    apiMocks.getDashboard.mockResolvedValueOnce(dashboard);
+    render(App);
+    expect(
+      await screen.findByText('Fewer than three compatible observations are available.'),
+    ).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Forecast' }));
+    expect(await screen.findByLabelText('Telemetry state: Unavailable')).toBeInTheDocument();
+  });
+
+  it('keeps diagnostics paths redacted until the explicit copy action', async () => {
+    render(App);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }));
+    expect(
+      await screen.findByText('%APPDATA%\\dev.codexmeter.app\\codex-meter.sqlite'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/C:\\Users\\/i)).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy full resolved database path' }));
+    expect(apiMocks.getResolvedDatabasePath).toHaveBeenCalledTimes(1);
   });
 });

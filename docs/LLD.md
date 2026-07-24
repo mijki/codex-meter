@@ -16,6 +16,8 @@ The UI works against these types from `src/lib/types.ts`:
 - `AppSettings`
 - `TelemetryState` / `TelemetryStatus`
 - `QuotaAlert` / `AlertCenter`
+- `QuotaForecast` / `ForecastQuality` / `ConsumptionTrajectoryPoint`
+- `BurnRatePoint` / `ForecastRisk` / `ForecastConfidence`
 
 Accuracy is always one of:
 
@@ -32,8 +34,9 @@ absent value cannot be confused with an explicitly reported zero.
 
 - `src/App.svelte` drives navigation, Live/Demo presentation mode, alert
   dismissal, exports, settings persistence, and local deletion.
-- `Overview.svelte`, `TelemetryState.svelte`, `QuotaAlertCard.svelte`, and
-  `AlertCenter.svelte` render the shared state and alert contracts.
+- `Overview.svelte`, `ForecastView.svelte`, `TimeSeriesChart.svelte`,
+  `TelemetryState.svelte`, `QuotaAlertCard.svelte`, and `AlertCenter.svelte`
+  render the shared operational, chart, state, and alert contracts.
 - `QuotaCard.svelte` renders used/remaining quota, local reset time, and a one-second live countdown.
 - `AccuracyBadge.svelte` displays the visible accuracy label.
 - `src/lib/api.ts` uses browser fallbacks outside Tauri and invokes desktop commands inside Tauri.
@@ -45,8 +48,10 @@ absent value cannot be confused with an explicitly reported zero.
 `src-tauri/migrations/0001_initial.sql` defines the normalized base model.
 `0002_live_account_telemetry.sql` adds raw reset interpretation and account
 usage. `0003_alerts_and_source_health.sql` adds alert history/dismissal and
-source last-success timestamps. Embedded migrations execute transactionally,
-in numeric order, and only once. The important tables are:
+source last-success timestamps. `0004_quota_forecasts.sql` adds forecast
+history/evaluation and unread/resolved alert metadata. Embedded migrations
+execute transactionally, in numeric order, and only once. The important tables
+are:
 
 | Table                                             | Purpose                                                        |
 | ------------------------------------------------- | -------------------------------------------------------------- |
@@ -64,6 +69,7 @@ in numeric order, and only once. The important tables are:
 | `burn_analyses`                                   | Store calculated burn summaries.                               |
 | `collection_errors`                               | Store redacted collection failures.                            |
 | `alert_history`                                   | Persist quota alerts and dismissal history.                    |
+| `quota_forecast_history`                          | Persist model inputs/outcomes for later evaluation.            |
 | `settings`                                        | Store user preferences.                                        |
 | `exports`                                         | Track export runs.                                             |
 
@@ -73,6 +79,8 @@ The frontend currently expects these Tauri commands:
 
 - `get_dashboard`
 - `dismiss_alert`
+- `mark_alerts_read`
+- `get_resolved_database_path`
 - `get_settings`
 - `get_collector_diagnostics`
 - `save_settings`
@@ -86,7 +94,7 @@ raw protocol messages to Svelte.
 
 ## Collector runtime
 
-`src-tauri/src/collector.rs` owns the child process, stdin/stdout threads, and typed runtime events. `src-tauri/src/app_server.rs` owns protocol parsing, monotonic request correlation, health transitions, deadlines, bounded exponential restart backoff with jitter, pause/resume, and graceful shutdown actions.
+`src-tauri/src/collector.rs` owns the child process, stdin/stdout threads, and typed runtime events. `src-tauri/src/app_server.rs` owns protocol parsing, monotonic request correlation, health transitions, deadlines, bounded exponential restart backoff with jitter, pause/resume, and graceful shutdown actions. `src-tauri/src/forecast.rs` remains protocol-independent and accepts only normalized quota observations.
 
 The initialization sequence is:
 
@@ -97,6 +105,23 @@ The initialization sequence is:
 5. emit typed Tauri status/threshold events.
 
 The frontend never parses App Server JSON. No runtime path starts a thread or turn.
+
+## Forecasting contract
+
+- Observations are selected from the current bucket/reset identity and ordered by
+  receipt time.
+- An interval rate is `delta used percentage / elapsed hours`; rolling
+  30-minute, 1-hour, 3-hour, and 6-hour rates use the same actual-time basis.
+- The candidate set is the latest interval, complete-segment rate, EWMA
+  (`alpha = 0.35`), and ordinary least squares. Quality considers sample count,
+  coverage, polling regularity, largest gap, slope stability, and model
+  agreement.
+- At least three observations and 15 minutes of coverage are required. Usage
+  drops greater than two percentage points or gaps over 120 minutes invalidate
+  the earlier segment.
+- Safe rate is remaining percentage divided by time until reset. Pace ratio is
+  selected rate divided by safe rate. Forecast timestamps and confidence ranges
+  are `estimated`; reported points and exact arithmetic retain their own labels.
 
 ## Runtime storage and exports
 

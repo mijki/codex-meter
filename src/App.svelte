@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import AccuracyBadge from './lib/components/AccuracyBadge.svelte';
   import AlertCenter from './lib/components/AlertCenter.svelte';
+  import ForecastView from './lib/components/ForecastView.svelte';
   import Overview from './lib/components/Overview.svelte';
   import TelemetryState from './lib/components/TelemetryState.svelte';
   import {
@@ -12,13 +13,16 @@
     getCollectorDiagnostics,
     getDashboard,
     getOtelConfigSnippet,
+    getResolvedDatabasePath,
     getSettings,
+    markAlertsRead,
     saveSettings,
   } from './lib/api';
   import type { AppSettings, CollectorDiagnostics, Dashboard, QuotaAlert } from './lib/types';
 
   type View =
     | 'Overview'
+    | 'Forecast'
     | 'Alerts'
     | 'Usage Burn'
     | 'Projects'
@@ -31,13 +35,14 @@
 
   const views: Array<{ name: View; glyph: string }> = [
     { name: 'Overview', glyph: '◌' },
-    { name: 'Alerts', glyph: '!' },
+    { name: 'Forecast', glyph: '⌁' },
     { name: 'Usage Burn', glyph: '↗' },
     { name: 'Projects', glyph: '◇' },
     { name: 'Chats', glyph: '◫' },
     { name: 'Turns', glyph: '↳' },
     { name: 'Models', glyph: '⬡' },
     { name: 'History', glyph: '◈' },
+    { name: 'Alerts', glyph: '!' },
     { name: 'Diagnostics', glyph: '◉' },
     { name: 'Settings', glyph: '⚙' },
   ];
@@ -160,6 +165,54 @@
     }
   };
 
+  const refreshDashboard = async (): Promise<void> => {
+    busy = true;
+    error = '';
+    try {
+      const [nextDashboard, nextDiagnostics] = await Promise.all([
+        getDashboard(),
+        getCollectorDiagnostics(),
+      ]);
+      liveDashboard = nextDashboard;
+      diagnostics = nextDiagnostics;
+      if (displayMode === 'live') dashboard = nextDashboard;
+      notice =
+        displayMode === 'live'
+          ? 'Live telemetry refreshed.'
+          : 'Live telemetry refreshed in the background; Demo data remains visible.';
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : 'Telemetry refresh failed.';
+    } finally {
+      busy = false;
+    }
+  };
+
+  const navigate = (view: View): void => {
+    active = view;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  };
+
+  const markAllAlertsRead = async (): Promise<void> => {
+    if (displayMode === 'demo') {
+      if (!dashboard) return;
+      dashboard = {
+        ...dashboard,
+        alerts: {
+          ...dashboard.alerts,
+          active: dashboard.alerts.active.map((alert) => ({ ...alert, unread: false })),
+        },
+      };
+      notice = 'Demo alerts marked read in memory only.';
+      return;
+    }
+    try {
+      dashboard = await markAlertsRead();
+      liveDashboard = dashboard;
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : 'Alerts could not be marked as read.';
+    }
+  };
+
   const handleDismiss = async (alert: QuotaAlert): Promise<void> => {
     if (!dashboard) return;
     if (displayMode === 'demo') {
@@ -203,7 +256,8 @@
     busy = true;
     try {
       const path = await exportData(format);
-      notice = `Export created: ${path}`;
+      const fileName = path.split(/[\\/]/).pop() ?? 'export file';
+      notice = `Export created under %APPDATA%\\dev.codexmeter.app\\exports (${fileName}).`;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : 'Export failed.';
     } finally {
@@ -238,6 +292,12 @@
     await navigator.clipboard.writeText(otelSnippet);
     notice = 'OpenTelemetry configuration copied for review.';
   };
+
+  const copyResolvedDatabasePath = async (): Promise<void> => {
+    const path = await getResolvedDatabasePath();
+    await navigator.clipboard.writeText(path);
+    notice = 'The full resolved database path was copied explicitly.';
+  };
 </script>
 
 <svelte:head><meta name="color-scheme" content="dark light" /></svelte:head>
@@ -251,13 +311,13 @@
 
     <nav aria-label="Primary navigation">
       {#each views as view (view.name)}
-        <button class:active={active === view.name} onclick={() => (active = view.name)}>
+        <button class:active={active === view.name} onclick={() => void navigate(view.name)}>
           <span aria-hidden="true">{view.glyph}</span>{view.name}
-          {#if view.name === 'Alerts' && (dashboard?.alerts.active.length ?? 0) > 0}
+          {#if view.name === 'Alerts' && (dashboard?.alerts.active.filter((alert) => alert.unread).length ?? 0) > 0}
             <em
               class="nav-alert-count"
-              aria-label={`${dashboard?.alerts.active.length ?? 0} active alerts`}
-              >{dashboard?.alerts.active.length}</em
+              aria-label={`${dashboard?.alerts.active.filter((alert) => alert.unread).length ?? 0} unread active alerts`}
+              >{dashboard?.alerts.active.filter((alert) => alert.unread).length}</em
             >
           {/if}
         </button>
@@ -306,11 +366,11 @@
         <button
           class="notification-indicator"
           class:has-alerts={(dashboard?.alerts.active.length ?? 0) > 0}
-          aria-label={`Open alert center, ${dashboard?.alerts.active.length ?? 0} active alerts`}
-          onclick={() => (active = 'Alerts')}
+          aria-label={`Open alert center, ${dashboard?.alerts.active.filter((alert) => alert.unread).length ?? 0} unread alerts, ${dashboard?.alerts.active.length ?? 0} active alerts`}
+          onclick={() => void navigate('Alerts')}
         >
           <span aria-hidden="true">!</span>
-          {dashboard?.alerts.active.length ?? 0}
+          {dashboard?.alerts.active.filter((alert) => alert.unread).length ?? 0}
         </button>
       </div>
     </header>
@@ -333,12 +393,20 @@
       {#if active === 'Overview'}
         <Overview
           {dashboard}
-          onnavigate={(view) => (active = view)}
+          onnavigate={(view) => void navigate(view)}
           ondismiss={handleDismiss}
           onenterdemo={switchToDemo}
+          onrefresh={refreshDashboard}
+          refreshdisabled={busy}
         />
+      {:else if active === 'Forecast'}
+        <ForecastView {dashboard} />
       {:else if active === 'Alerts'}
-        <AlertCenter alerts={dashboard.alerts} ondismiss={handleDismiss} />
+        <AlertCenter
+          alerts={dashboard.alerts}
+          ondismiss={handleDismiss}
+          onmarkread={markAllAlertsRead}
+        />
       {:else if active === 'Usage Burn'}
         <section class="view-stack burn-layout">
           <article class="burn-hero panel">
@@ -514,6 +582,9 @@
               </dl>
               <button class="button secondary" onclick={() => runExport('diagnostics')}
                 >Export redacted diagnostics</button
+              >
+              <button class="button secondary" onclick={copyResolvedDatabasePath}
+                >Copy full resolved database path</button
               >
             </article>
           </div>

@@ -13,18 +13,20 @@ use crate::domain::{
     AccountUsageDailyBucket, AccountUsageSummary, Accuracy, AlertCenter, AlertSeverity,
     AppSettings, BurnAnalysis, BurnConfidence, CapabilityStatus, ChannelHealth, ChannelStatus,
     CollectorDiagnostics, CollectorErrorDiagnostic, CollectorSessionDiagnostic, Dashboard,
-    DiagnosticsReport, DistributionPoint, ExpensiveTurn, MissingSignal, QuotaAlert,
-    QuotaThresholdEvent, QuotaWindow, SourceError, SourceStatus, TelemetryState, TelemetryStatus,
-    TokenTotals,
+    DiagnosticsReport, DistributionPoint, ExpensiveTurn, ForecastConfidence, ForecastModel,
+    ForecastRisk, MissingSignal, QuotaAlert, QuotaForecast, QuotaObservation, QuotaThresholdEvent,
+    QuotaWindow, SourceError, SourceStatus, TelemetryState, TelemetryStatus, TokenTotals,
 };
+use crate::forecast::{calculate_forecast, ForecastInput};
 use crate::redaction::redact_diagnostic;
 
-const MIGRATION_VERSION: i64 = 3;
+const MIGRATION_VERSION: i64 = 4;
 const INITIAL_MIGRATION_SQL: &str = include_str!("../migrations/0001_initial.sql");
 const LIVE_ACCOUNT_MIGRATION_SQL: &str =
     include_str!("../migrations/0002_live_account_telemetry.sql");
 const ALERTS_AND_SOURCE_HEALTH_MIGRATION_SQL: &str =
     include_str!("../migrations/0003_alerts_and_source_health.sql");
+const QUOTA_FORECASTS_MIGRATION_SQL: &str = include_str!("../migrations/0004_quota_forecasts.sql");
 const MIGRATIONS: &[(i64, &str, &str)] = &[
     (1, "0001_initial", INITIAL_MIGRATION_SQL),
     (2, "0002_live_account_telemetry", LIVE_ACCOUNT_MIGRATION_SQL),
@@ -33,6 +35,7 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0003_alerts_and_source_health",
         ALERTS_AND_SOURCE_HEALTH_MIGRATION_SQL,
     ),
+    (4, "0004_quota_forecasts", QUOTA_FORECASTS_MIGRATION_SQL),
 ];
 const DEFAULT_CODEX_VERSION: &str = "0.144.1";
 const FIXTURE_OCCURRED_AT: &str = "2026-07-22T12:42:00Z";
@@ -136,6 +139,104 @@ impl Database {
         Ok(())
     }
 
+    fn sync_forecast_alerts(
+        &self,
+        forecast: &QuotaForecast,
+        reset_window_id: &str,
+    ) -> Result<(), DbError> {
+        let (Some(used_percent), Some(remaining_percent)) =
+            (forecast.current_used_percent, forecast.remaining_percent)
+        else {
+            return Ok(());
+        };
+        let exhaustion_hours = forecast
+            .predicted_exhaustion_at
+            .as_deref()
+            .and_then(|value| {
+                let predicted = chrono::DateTime::parse_from_rfc3339(value).ok()?;
+                let generated =
+                    chrono::DateTime::parse_from_rfc3339(&forecast.generated_at).ok()?;
+                Some((predicted - generated).num_seconds() as f64 / 3600.0)
+            });
+        let candidates = [
+            (
+                "pace_exceeds_safe",
+                1001,
+                forecast.pace_ratio.is_some_and(|ratio| ratio >= 1.0),
+                if forecast.pace_ratio.is_some_and(|ratio| ratio > 1.5) {
+                    AlertSeverity::Critical
+                } else {
+                    AlertSeverity::Warning
+                },
+            ),
+            (
+                "forecast_exhaustion_before_reset",
+                1002,
+                forecast.exhaustion_before_reset == Some(true),
+                AlertSeverity::Critical,
+            ),
+            (
+                "forecast_exhaustion_within_4h",
+                1003,
+                exhaustion_hours.is_some_and(|hours| (1.0..=4.0).contains(&hours)),
+                AlertSeverity::Warning,
+            ),
+            (
+                "forecast_exhaustion_within_1h",
+                1004,
+                exhaustion_hours.is_some_and(|hours| (0.0..1.0).contains(&hours)),
+                AlertSeverity::Critical,
+            ),
+        ];
+        let now = now_rfc3339();
+        for (alert_type, code, active, severity) in candidates {
+            if !active {
+                self.conn.execute(
+                    "UPDATE alert_history
+                     SET resolved_at = COALESCE(resolved_at, ?4), unread = 0
+                     WHERE bucket_id = ?1 AND reset_window_id = ?2 AND alert_type = ?3",
+                    params![forecast.bucket_id, reset_window_id, alert_type, now],
+                )?;
+                continue;
+            }
+            let id = alert_id(&forecast.bucket_id, reset_window_id, code);
+            self.conn.execute(
+                "INSERT INTO alert_history(
+                    id, bucket_id, bucket_name, reset_window_id, resets_at, threshold,
+                    used_percent, remaining_percent, severity, accuracy,
+                    collection_timestamp, created_at, dismissed_at, resolved_at, unread,
+                    alert_type, alert_source, predicted_exhaustion_at, forecast_confidence
+                 )
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'estimated',
+                        ?10, ?10, NULL, NULL, 1, ?11, 'local_forecast', ?12, ?13)
+                 ON CONFLICT(bucket_id, reset_window_id, threshold) DO UPDATE SET
+                   used_percent = excluded.used_percent,
+                   remaining_percent = excluded.remaining_percent,
+                   severity = excluded.severity,
+                   collection_timestamp = excluded.collection_timestamp,
+                   resolved_at = NULL,
+                   predicted_exhaustion_at = excluded.predicted_exhaustion_at,
+                   forecast_confidence = excluded.forecast_confidence",
+                params![
+                    id,
+                    forecast.bucket_id,
+                    forecast.bucket_name,
+                    reset_window_id,
+                    forecast.resets_at,
+                    code,
+                    used_percent,
+                    remaining_percent,
+                    severity_str(severity),
+                    now,
+                    alert_type,
+                    forecast.predicted_exhaustion_at,
+                    forecast_confidence_str(forecast.quality.confidence),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn dashboard(&self) -> Result<Dashboard, DbError> {
         let codex_version = self.codex_version()?;
         let mut dashboard = Dashboard::empty(codex_version.clone());
@@ -145,6 +246,14 @@ impl Database {
         dashboard.quota = self.quota_windows()?;
         dashboard.quota_status =
             self.account_signal_status("quota_snapshots", "Quota windows", "Codex App Server")?;
+        dashboard.forecasts = self.quota_forecasts()?;
+        dashboard.forecast_status = dashboard
+            .forecasts
+            .iter()
+            .find(|forecast| forecast.status.state == TelemetryState::Live)
+            .or_else(|| dashboard.forecasts.first())
+            .map(|forecast| forecast.status.clone())
+            .unwrap_or_else(|| Dashboard::empty(codex_version.clone()).forecast_status);
         if !dashboard.quota.is_empty()
             && dashboard
                 .quota
@@ -334,6 +443,7 @@ impl Database {
             "Live rate limits recorded",
         )?;
         tx.commit()?;
+        self.evaluate_completed_forecasts()?;
         Ok(())
     }
 
@@ -573,9 +683,19 @@ impl Database {
     ) -> Result<(), DbError> {
         self.conn.execute(
             "UPDATE alert_history
-             SET dismissed_at = COALESCE(dismissed_at, ?4)
+             SET dismissed_at = COALESCE(dismissed_at, ?4), unread = 0
              WHERE bucket_id = ?1 AND reset_window_id = ?2 AND threshold = ?3",
             params![bucket_id, reset_window_id, threshold, now_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_alerts_read(&mut self) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE alert_history
+             SET unread = 0
+             WHERE unread = 1 AND dismissed_at IS NULL AND resolved_at IS NULL",
+            [],
         )?;
         Ok(())
     }
@@ -846,6 +966,54 @@ impl Database {
             ]));
         }
 
+        for forecast in &dashboard.forecasts {
+            lines.push(csv_row(&[
+                "quota_forecast",
+                &forecast.bucket_id,
+                &forecast.window_label,
+                &forecast
+                    .selected_rate_pph
+                    .map(|value| format!("{value:.4}"))
+                    .unwrap_or_default(),
+                accuracy_str(Accuracy::Estimated),
+                forecast_risk_str(forecast.risk),
+                forecast.predicted_exhaustion_at.as_deref().unwrap_or(""),
+                &forecast
+                    .projected_usage_at_reset
+                    .map(format_percent)
+                    .unwrap_or_default(),
+                forecast_confidence_str(forecast.quality.confidence),
+            ]));
+            lines.push(csv_row(&[
+                "quota_safe_rate",
+                &forecast.bucket_id,
+                &forecast.window_label,
+                &forecast
+                    .safe_rate_pph
+                    .map(|value| format!("{value:.4}"))
+                    .unwrap_or_default(),
+                accuracy_str(Accuracy::DerivedExact),
+                "percentage points per hour",
+                forecast.resets_at.as_deref().unwrap_or(""),
+                "",
+                "",
+            ]));
+        }
+
+        for alert in &dashboard.alerts.history {
+            lines.push(csv_row(&[
+                "alert",
+                &alert.id,
+                &alert.alert_type,
+                &format_percent(alert.used_percent),
+                accuracy_str(alert.accuracy),
+                &alert.alert_source,
+                &alert.bucket_id,
+                alert.resets_at.as_deref().unwrap_or(""),
+                alert.resolved_at.as_deref().unwrap_or(""),
+            ]));
+        }
+
         if let Some(account_usage) = &dashboard.account_usage {
             for (label, value) in [
                 ("lifetimeTokens", account_usage.lifetime_tokens),
@@ -1024,6 +1192,7 @@ impl Database {
         for statement in [
             "DELETE FROM notification_state",
             "DELETE FROM alert_history",
+            "DELETE FROM quota_forecast_history",
             "DELETE FROM burn_analyses",
             "DELETE FROM quota_snapshots",
             "DELETE FROM quota_buckets",
@@ -1807,6 +1976,256 @@ impl Database {
         collect_rows(rows)
     }
 
+    fn quota_forecasts(&self) -> Result<Vec<QuotaForecast>, DbError> {
+        let windows = self.quota_windows()?;
+        let mut forecasts = Vec::with_capacity(windows.len());
+        for window in windows {
+            let reset_window_id = window
+                .resets_at_raw
+                .map(|raw| format!("raw:{raw}"))
+                .or_else(|| {
+                    window
+                        .resets_at
+                        .as_ref()
+                        .map(|value| format!("iso:{value}"))
+                })
+                .unwrap_or_else(|| "reset:unavailable".to_string());
+            let reset_identity = window
+                .resets_at_raw
+                .map(|raw| raw.to_string())
+                .or_else(|| window.resets_at.clone())
+                .unwrap_or_else(|| "none".to_string());
+            let mut statement = self.conn.prepare(
+                "SELECT observed_at, used_percent, accuracy
+                 FROM quota_snapshots
+                 WHERE bucket_id = ?1
+                   AND COALESCE(CAST(resets_at_raw AS TEXT), resets_at, 'none') = ?2
+                   AND used_percent IS NOT NULL
+                 ORDER BY observed_at ASC",
+            )?;
+            let rows = statement.query_map(params![window.id.as_str(), reset_identity], |row| {
+                Ok(QuotaObservation {
+                    observed_at: row.get(0)?,
+                    used_percent: row.get(1)?,
+                    accuracy: parse_accuracy(row.get::<_, String>(2)?.as_str())?,
+                })
+            })?;
+            let observations = collect_rows(rows)?;
+            let resets_at = window
+                .resets_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc));
+            let forecast = calculate_forecast(ForecastInput {
+                bucket_id: window.id.clone(),
+                bucket_name: window.name.clone(),
+                window_label: window.window_label.clone(),
+                generated_at: Utc::now(),
+                resets_at,
+                observations,
+            });
+            if !self.demo_mode()? {
+                self.persist_forecast(&forecast, &reset_window_id)?;
+            }
+            forecasts.push(forecast);
+        }
+        forecasts.sort_by(|left, right| {
+            forecast_priority(right)
+                .partial_cmp(&forecast_priority(left))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(forecasts)
+    }
+
+    fn persist_forecast(
+        &self,
+        forecast: &QuotaForecast,
+        reset_window_id: &str,
+    ) -> Result<(), DbError> {
+        let latest_observation = forecast
+            .status
+            .last_observed_at
+            .as_deref()
+            .unwrap_or(forecast.generated_at.as_str());
+        let id = format!(
+            "{}|{}|{}",
+            forecast.bucket_id, reset_window_id, latest_observation
+        );
+        self.conn.execute(
+            "INSERT INTO quota_forecast_history(
+                id, bucket_id, reset_window_id, generated_at, forecast_model,
+                predicted_exhaustion_at, projected_usage_at_reset, safe_rate_pph,
+                selected_burn_rate_pph, pace_ratio, confidence, sample_count,
+                coverage_duration_sec, largest_gap_sec, invalidation_reason,
+                exhaustion_before_reset
+             )
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ON CONFLICT(id) DO UPDATE SET
+               generated_at = excluded.generated_at,
+               forecast_model = excluded.forecast_model,
+               predicted_exhaustion_at = excluded.predicted_exhaustion_at,
+               projected_usage_at_reset = excluded.projected_usage_at_reset,
+               safe_rate_pph = excluded.safe_rate_pph,
+               selected_burn_rate_pph = excluded.selected_burn_rate_pph,
+               pace_ratio = excluded.pace_ratio,
+               confidence = excluded.confidence,
+               sample_count = excluded.sample_count,
+               coverage_duration_sec = excluded.coverage_duration_sec,
+               largest_gap_sec = excluded.largest_gap_sec,
+               invalidation_reason = excluded.invalidation_reason,
+               exhaustion_before_reset = excluded.exhaustion_before_reset",
+            params![
+                id,
+                forecast.bucket_id,
+                reset_window_id,
+                forecast.generated_at,
+                forecast_model_str(forecast.quality.selected_model),
+                forecast.predicted_exhaustion_at,
+                forecast.projected_usage_at_reset,
+                forecast.safe_rate_pph,
+                forecast.selected_rate_pph,
+                forecast.pace_ratio,
+                forecast_confidence_str(forecast.quality.confidence),
+                forecast.quality.observation_count as i64,
+                (forecast.quality.coverage_duration_minutes * 60.0).round() as i64,
+                (forecast.quality.largest_gap_minutes * 60.0).round() as i64,
+                forecast.quality.invalidation_reason,
+                forecast.exhaustion_before_reset,
+            ],
+        )?;
+        self.sync_forecast_alerts(forecast, reset_window_id)?;
+        Ok(())
+    }
+
+    fn evaluate_completed_forecasts(&self) -> Result<(), DbError> {
+        let pending = {
+            let mut statement = self.conn.prepare(
+                "SELECT id, bucket_id, reset_window_id, generated_at,
+                        predicted_exhaustion_at, projected_usage_at_reset,
+                        exhaustion_before_reset
+                 FROM quota_forecast_history
+                 WHERE evaluated_at IS NULL AND reset_window_id LIKE 'raw:%'",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<f64>>(5)?,
+                        row.get::<_, Option<bool>>(6)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        for (
+            id,
+            bucket_id,
+            reset_window_id,
+            generated_at,
+            predicted_exhaustion_at,
+            projected_usage_at_reset,
+            exhaustion_before_reset,
+        ) in pending
+        {
+            let Some(raw_reset) = reset_window_id
+                .strip_prefix("raw:")
+                .and_then(|value| value.parse::<i64>().ok())
+            else {
+                continue;
+            };
+            let normalized_reset = normalize_reset_timestamp(Some(raw_reset));
+            let Some(reset_at) = normalized_reset.normalized else {
+                continue;
+            };
+            let outcome_crossed = self.conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM quota_snapshots
+                    WHERE bucket_id = ?1
+                      AND COALESCE(resets_at_raw, -1) <> ?2
+                      AND observed_at >= ?3
+                 )",
+                params![bucket_id, raw_reset, reset_at],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !outcome_crossed {
+                continue;
+            }
+            let final_observation = self
+                .conn
+                .query_row(
+                    "SELECT observed_at, used_percent
+                     FROM quota_snapshots
+                     WHERE bucket_id = ?1 AND resets_at_raw = ?2 AND used_percent IS NOT NULL
+                     ORDER BY observed_at DESC
+                     LIMIT 1",
+                    params![bucket_id, raw_reset],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)),
+                )
+                .optional()?;
+            let Some((final_observed_at, final_usage)) = final_observation else {
+                continue;
+            };
+            let exhaustion_observed_at = self
+                .conn
+                .query_row(
+                    "SELECT observed_at
+                     FROM quota_snapshots
+                     WHERE bucket_id = ?1 AND resets_at_raw = ?2 AND used_percent >= 100
+                     ORDER BY observed_at ASC
+                     LIMIT 1",
+                    params![bucket_id, raw_reset],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let observed_exhaustion = exhaustion_observed_at.is_some();
+            let forecast_error_minutes = match (
+                predicted_exhaustion_at.as_deref(),
+                exhaustion_observed_at.as_deref(),
+            ) {
+                (Some(predicted), Some(observed)) => {
+                    let predicted = chrono::DateTime::parse_from_rfc3339(predicted)?;
+                    let observed = chrono::DateTime::parse_from_rfc3339(observed)?;
+                    Some((predicted - observed).num_seconds() as f64 / 60.0)
+                }
+                _ => None,
+            };
+            let outcome_at = exhaustion_observed_at
+                .as_deref()
+                .unwrap_or(&final_observed_at);
+            let generated = chrono::DateTime::parse_from_rfc3339(&generated_at)?;
+            let outcome = chrono::DateTime::parse_from_rfc3339(outcome_at)?;
+            let lead_time_minutes = Some((outcome - generated).num_seconds() as f64 / 60.0);
+            let projected_usage_error =
+                projected_usage_at_reset.map(|projected| projected - final_usage);
+            let classification_correct =
+                exhaustion_before_reset.map(|predicted| predicted == observed_exhaustion);
+            self.conn.execute(
+                "UPDATE quota_forecast_history
+                 SET observed_final_usage = ?2,
+                     evaluated_at = ?3,
+                     forecast_error_minutes = ?4,
+                     forecast_lead_time_minutes = ?5,
+                     projected_usage_error = ?6,
+                     classification_correct = ?7
+                 WHERE id = ?1",
+                params![
+                    id,
+                    final_usage,
+                    now_rfc3339(),
+                    forecast_error_minutes,
+                    lead_time_minutes,
+                    projected_usage_error,
+                    classification_correct,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     fn account_usage_summary(&self) -> Result<Option<AccountUsageSummary>, DbError> {
         let latest = self
             .conn
@@ -2061,6 +2480,32 @@ impl Database {
                         occurred_at,
                         message,
                     });
+                let restart_count = if source.id == "app-server" {
+                    self.conn
+                        .query_row(
+                            "SELECT COALESCE(MAX(restart_count), 0) FROM collector_sessions",
+                            [],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .unwrap_or_default()
+                } else {
+                    0
+                };
+                let telemetry_state = if !source.enabled {
+                    TelemetryState::Disabled
+                } else {
+                    match source.health {
+                        ChannelStatus::Healthy
+                            if source.last_successful_collection_at.is_some() =>
+                        {
+                            TelemetryState::Live
+                        }
+                        ChannelStatus::Healthy | ChannelStatus::Inactive => TelemetryState::Waiting,
+                        ChannelStatus::Degraded | ChannelStatus::Unavailable => {
+                            TelemetryState::Error
+                        }
+                    }
+                };
                 Ok(ChannelHealth {
                     id: source.id.clone(),
                     name: source_display_name(source.id.as_str()).to_string(),
@@ -2072,6 +2517,13 @@ impl Database {
                     last_successful_collection_at: source.last_successful_collection_at,
                     latest_error,
                     capabilities: source_capabilities(source.id.as_str()),
+                    telemetry_state,
+                    configuration_status: if source.enabled {
+                        "Configured".to_string()
+                    } else {
+                        "Not configured".to_string()
+                    },
+                    restart_count,
                 })
             })
             .collect()
@@ -2260,6 +2712,7 @@ impl Database {
         Ok(AlertCenter {
             active: self.alerts_query(
                 "WHERE ah.dismissed_at IS NULL
+                   AND ah.resolved_at IS NULL
                    AND EXISTS (
                      SELECT 1
                      FROM quota_snapshots qs
@@ -2284,7 +2737,9 @@ impl Database {
             "SELECT
                 ah.id, ah.created_at, ah.collection_timestamp, ah.bucket_id, ah.bucket_name,
                 ah.reset_window_id, ah.resets_at, ah.threshold, ah.used_percent,
-                ah.remaining_percent, ah.severity, ah.accuracy, ah.dismissed_at
+                ah.remaining_percent, ah.severity, ah.accuracy, ah.dismissed_at,
+                ah.resolved_at, ah.unread, ah.alert_type, ah.alert_source,
+                ah.predicted_exhaustion_at, ah.forecast_confidence
              FROM alert_history ah
              {filter}
              ORDER BY ah.created_at DESC, ah.threshold DESC
@@ -2306,6 +2761,14 @@ impl Database {
                 severity: parse_severity(row.get::<_, String>(10)?.as_str())?,
                 accuracy: parse_accuracy(row.get::<_, String>(11)?.as_str())?,
                 dismissed_at: row.get(12)?,
+                resolved_at: row.get(13)?,
+                unread: row.get(14)?,
+                alert_type: row.get(15)?,
+                alert_source: row.get(16)?,
+                predicted_exhaustion_at: row.get(17)?,
+                forecast_confidence: parse_forecast_confidence(
+                    row.get::<_, Option<String>>(18)?.as_deref(),
+                )?,
             })
         })?;
         collect_rows(rows)
@@ -2542,6 +3005,7 @@ impl Database {
             ("account_usage_snapshots", "observed_at"),
             ("account_usage_daily", "observed_at"),
             ("burn_analyses", "created_at"),
+            ("quota_forecast_history", "generated_at"),
             ("collection_errors", "occurred_at"),
             ("alert_history", "created_at"),
             ("collector_sessions", "started_at"),
@@ -3174,6 +3638,67 @@ fn parse_confidence(value: &str) -> Result<BurnConfidence, DbError> {
     }
 }
 
+fn forecast_model_str(value: ForecastModel) -> &'static str {
+    match value {
+        ForecastModel::RecentRate => "recent_rate",
+        ForecastModel::OrdinaryLeastSquares => "ordinary_least_squares",
+        ForecastModel::ExponentiallyWeightedMovingAverage => {
+            "exponentially_weighted_moving_average"
+        }
+        ForecastModel::Unavailable => "unavailable",
+    }
+}
+
+fn forecast_confidence_str(value: ForecastConfidence) -> &'static str {
+    match value {
+        ForecastConfidence::Unavailable => "unavailable",
+        ForecastConfidence::Preliminary => "preliminary",
+        ForecastConfidence::Low => "low",
+        ForecastConfidence::Medium => "medium",
+        ForecastConfidence::High => "high",
+    }
+}
+
+fn parse_forecast_confidence(value: Option<&str>) -> rusqlite::Result<Option<ForecastConfidence>> {
+    value
+        .map(|value| match value {
+            "unavailable" => Ok(ForecastConfidence::Unavailable),
+            "preliminary" => Ok(ForecastConfidence::Preliminary),
+            "low" => Ok(ForecastConfidence::Low),
+            "medium" => Ok(ForecastConfidence::Medium),
+            "high" => Ok(ForecastConfidence::High),
+            other => Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                Type::Text,
+                Box::new(DbError::InvalidData(format!(
+                    "unknown forecast confidence: {other}"
+                ))),
+            )),
+        })
+        .transpose()
+}
+
+fn forecast_priority(forecast: &QuotaForecast) -> f64 {
+    let risk = match forecast.risk {
+        ForecastRisk::ExhaustionLikely => 4.0,
+        ForecastRisk::AtRisk => 3.0,
+        ForecastRisk::Watch => 2.0,
+        ForecastRisk::Healthy => 1.0,
+        ForecastRisk::Unavailable => 0.0,
+    };
+    risk * 1_000.0 + forecast.current_used_percent.unwrap_or_default()
+}
+
+fn forecast_risk_str(value: ForecastRisk) -> &'static str {
+    match value {
+        ForecastRisk::Healthy => "healthy",
+        ForecastRisk::Watch => "watch",
+        ForecastRisk::AtRisk => "at_risk",
+        ForecastRisk::ExhaustionLikely => "exhaustion_likely",
+        ForecastRisk::Unavailable => "unavailable",
+    }
+}
+
 fn parse_status(value: &str) -> rusqlite::Result<ChannelStatus> {
     match value {
         "healthy" => Ok(ChannelStatus::Healthy),
@@ -3771,6 +4296,139 @@ mod tests {
     }
 
     #[test]
+    fn quota_forecast_is_calculated_and_persisted_from_compatible_history() {
+        let (_dir, _path, mut db) = open_temp_db();
+        let now = Utc::now();
+        let reset_raw = (now + ChronoDuration::hours(2)).timestamp();
+        for (minutes_ago, used_percent) in [(120, 50), (90, 55), (60, 60), (30, 65), (0, 70)] {
+            let payload = json!({
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "limitId": "codex",
+                        "limitName": "Codex",
+                        "primary": {
+                            "usedPercent": used_percent,
+                            "windowDurationMins": 300,
+                            "resetsAt": reset_raw
+                        },
+                        "secondary": null
+                    }
+                }
+            });
+            db.record_rate_limits(
+                &payload,
+                &(now - ChronoDuration::minutes(minutes_ago)).to_rfc3339(),
+                "app_server",
+            )
+            .unwrap();
+        }
+
+        let dashboard = db.dashboard().unwrap();
+        let forecast = dashboard.forecasts.first().unwrap();
+        assert_eq!(forecast.quality.observation_count, 5);
+        assert!(forecast.selected_rate_pph.is_some());
+        assert!(forecast.safe_rate_pph.is_some());
+        assert_eq!(forecast.status.state, TelemetryState::Live);
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM quota_forecast_history", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        let csv = db.export_csv().unwrap();
+        assert!(csv.contains(&format!("\"quota_forecast\",\"{}\"", forecast.bucket_id)));
+        assert!(csv.contains(&format!("\"quota_safe_rate\",\"{}\"", forecast.bucket_id)));
+    }
+
+    #[test]
+    fn forecast_alerts_are_deduplicated_readable_and_resolved_when_the_segment_changes() {
+        let (_dir, _path, mut db) = open_temp_db();
+        let now = Utc::now();
+        let reset_raw = (now + ChronoDuration::hours(2)).timestamp();
+        for (minutes_ago, used_percent) in [(120, 20), (90, 35), (60, 50), (30, 65), (0, 80)] {
+            let payload = json!({
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "limitId": "codex",
+                        "limitName": "Codex",
+                        "primary": {
+                            "usedPercent": used_percent,
+                            "windowDurationMins": 300,
+                            "resetsAt": reset_raw
+                        },
+                        "secondary": null
+                    }
+                }
+            });
+            db.record_rate_limits(
+                &payload,
+                &(now - ChronoDuration::minutes(minutes_ago)).to_rfc3339(),
+                "app_server",
+            )
+            .unwrap();
+        }
+
+        let first = db.dashboard().unwrap();
+        let forecast_alerts = first
+            .alerts
+            .active
+            .iter()
+            .filter(|alert| alert.alert_source == "local_forecast")
+            .collect::<Vec<_>>();
+        assert!(forecast_alerts
+            .iter()
+            .any(|alert| alert.alert_type == "forecast_exhaustion_before_reset"));
+        assert!(forecast_alerts.iter().all(|alert| {
+            alert.accuracy == Accuracy::Estimated
+                && alert.unread
+                && alert.predicted_exhaustion_at.is_some()
+                && alert.forecast_confidence.is_some()
+        }));
+        let history_count = first.alerts.history.len();
+        assert_eq!(db.dashboard().unwrap().alerts.history.len(), history_count);
+
+        db.mark_alerts_read().unwrap();
+        assert!(db
+            .alert_center()
+            .unwrap()
+            .active
+            .iter()
+            .all(|alert| !alert.unread));
+
+        let reset_payload = json!({
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": "Codex",
+                    "primary": {
+                        "usedPercent": 10,
+                        "windowDurationMins": 300,
+                        "resetsAt": reset_raw
+                    },
+                    "secondary": null
+                }
+            }
+        });
+        db.record_rate_limits(
+            &reset_payload,
+            &(now + ChronoDuration::minutes(30)).to_rfc3339(),
+            "app_server",
+        )
+        .unwrap();
+
+        let resolved = db.dashboard().unwrap().alerts;
+        assert!(resolved
+            .active
+            .iter()
+            .all(|alert| alert.alert_source != "local_forecast"));
+        assert!(resolved.history.iter().any(|alert| {
+            alert.alert_source == "local_forecast" && alert.resolved_at.is_some()
+        }));
+    }
+
+    #[test]
     fn quota_threshold_notifications_are_exact_deduplicated_and_suppressed_in_demo_mode() {
         let (_dir, _path, mut db) = open_temp_db();
         let first_window = json!({
@@ -4318,7 +4976,7 @@ mod tests {
         assert!(csv_export.contains("\"account_usage_day\""));
 
         let diagnostics = db.diagnostics_json().unwrap();
-        assert!(diagnostics.contains("\"schemaVersion\": 3"));
+        assert!(diagnostics.contains("\"schemaVersion\": 4"));
         assert!(diagnostics.contains("\"demoMode\": true"));
         assert!(diagnostics.contains("\"collectorDiagnostics\""));
 

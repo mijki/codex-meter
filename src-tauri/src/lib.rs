@@ -2,6 +2,7 @@ pub mod app_server;
 pub mod collector;
 mod db;
 mod domain;
+mod forecast;
 pub mod hooks;
 pub mod otel;
 pub mod redaction;
@@ -121,18 +122,21 @@ fn get_collector_diagnostics(
         child_running: status.child_running,
         executable: Some(codex_executable_label()),
         transport: "stdio".to_string(),
-        database_path: Some(
-            state
-                .data_dir
-                .join("codex-meter.sqlite")
-                .display()
-                .to_string(),
-        ),
+        database_path: Some("%APPDATA%\\dev.codexmeter.app\\codex-meter.sqlite".to_string()),
         log_path: None,
-        schema_version: "0.144.1 · v1 + v2 + v3".to_string(),
+        schema_version: "0.144.1 · v1 + v2 + v3 + v4".to_string(),
         reset_interpretation,
         latest_error,
     })
+}
+
+#[tauri::command]
+fn get_resolved_database_path(state: State<'_, AppState>) -> String {
+    state
+        .data_dir
+        .join("codex-meter.sqlite")
+        .display()
+        .to_string()
 }
 
 #[tauri::command]
@@ -147,6 +151,16 @@ fn dismiss_alert(
         .lock()
         .map_err(command_error)?
         .dismiss_alert(&bucket_id, &reset_window_id, threshold)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn mark_alerts_read(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .database
+        .lock()
+        .map_err(command_error)?
+        .mark_alerts_read()
         .map_err(command_error)
 }
 
@@ -567,8 +581,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_dashboard,
             dismiss_alert,
+            mark_alerts_read,
             get_settings,
             get_collector_diagnostics,
+            get_resolved_database_path,
             save_settings,
             delete_local_data,
             get_otel_config_snippet,
