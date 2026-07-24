@@ -24,7 +24,7 @@ jobs:
       - run: pnpm tauri build
       - shell: pwsh
         run: Get-ChildItem src-tauri/target/release/bundle -Recurse -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path)" } | Set-Content checksums-sha256.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: |
